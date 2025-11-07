@@ -20,10 +20,7 @@ fn main() -> BulletResult<()> {
 
     let plane = client.load_urdf(
         "plane_transparent.urdf",
-        Some(UrdfOptions {
-            use_maximal_coordinates: Some(true),
-            ..Default::default()
-        }),
+        Some(UrdfOptions { use_maximal_coordinates: Some(true), ..Default::default() }),
     )?;
 
     client
@@ -48,10 +45,7 @@ fn main() -> BulletResult<()> {
     let mesh_scale = [0.1, 0.1, 0.1];
 
     let visual_shape = client.create_visual_shape(
-        &VisualGeometry::Mesh {
-            file: "duck.obj",
-            scale: mesh_scale,
-        },
+        &VisualGeometry::Mesh { file: "duck.obj", scale: mesh_scale },
         Some(VisualShapeOptions {
             transform: shift.into(),
             rgba: [1., 1., 1., 1.],
@@ -60,10 +54,7 @@ fn main() -> BulletResult<()> {
         }),
     )?;
     let collision_shape = client.create_collision_shape(
-        &CollisionGeometry::MeshFile {
-            file: "duck_vhacd.obj",
-            scale: mesh_scale,
-        },
+        &CollisionGeometry::MeshFile { file: "duck_vhacd.obj", scale: mesh_scale },
         Some(na::Isometry3::from(shift)),
     )?;
 
@@ -112,12 +103,7 @@ fn main() -> BulletResult<()> {
         for event in mouse_events {
             match event {
                 MouseEvent::Move { .. } => {}
-                MouseEvent::Button {
-                    mouse_x,
-                    mouse_y,
-                    button_index,
-                    button_state,
-                } => {
+                MouseEvent::Button { mouse_x, mouse_y, button_index, button_state } => {
                     if button_state.was_triggered() && button_index == 0 {
                         eprintln!("Mouse click at ({}, {})", mouse_x, mouse_y);
                         let (ray_from, ray_to) = get_ray_from_to(

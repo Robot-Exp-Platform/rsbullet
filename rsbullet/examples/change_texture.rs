@@ -27,18 +27,12 @@ fn main() -> BulletResult<()> {
         .change_visual_shape(
             plane,
             -1,
-            &ChangeVisualShapeOptions {
-                rgba_color: Some([1., 1., 1., 0.5]),
-                ..Default::default()
-            },
+            &ChangeVisualShapeOptions { rgba_color: Some([1., 1., 1., 0.5]), ..Default::default() },
         )?
         .change_visual_shape(
             plane,
             -1,
-            &ChangeVisualShapeOptions {
-                rgba_color: Some([1., 1., 1., 0.5]),
-                ..Default::default()
-            },
+            &ChangeVisualShapeOptions { rgba_color: Some([1., 1., 1., 0.5]), ..Default::default() },
         )?;
 
     const WIDTH: usize = 256;

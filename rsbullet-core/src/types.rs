@@ -288,19 +288,13 @@ impl From<[f64; 3]> for UrdfOptions {
 
 impl From<na::Isometry3<f64>> for UrdfOptions {
     fn from(base: na::Isometry3<f64>) -> Self {
-        Self {
-            base: Some(base),
-            ..Self::default()
-        }
+        Self { base: Some(base), ..Self::default() }
     }
 }
 
 impl From<LoadModelFlags> for UrdfOptions {
     fn from(flags: LoadModelFlags) -> Self {
-        UrdfOptions {
-            flags: Some(flags),
-            ..Default::default()
-        }
+        UrdfOptions { flags: Some(flags), ..Default::default() }
     }
 }
 
@@ -312,10 +306,7 @@ pub struct SdfOptions {
 
 impl From<(Option<bool>, Option<f64>)> for SdfOptions {
     fn from(value: (Option<bool>, Option<f64>)) -> Self {
-        Self {
-            use_maximal_coordinates: value.0,
-            global_scaling: value.1,
-        }
+        Self { use_maximal_coordinates: value.0, global_scaling: value.1 }
     }
 }
 
@@ -327,10 +318,7 @@ pub struct MjcfOptions {
 
 impl From<LoadModelFlags> for Option<MjcfOptions> {
     fn from(flags: LoadModelFlags) -> Self {
-        Some(MjcfOptions {
-            flags: Some(flags),
-            use_multi_body: None,
-        })
+        Some(MjcfOptions { flags: Some(flags), use_multi_body: None })
     }
 }
 
@@ -489,15 +477,7 @@ impl<'a> From<Entity<'a>> for CollisionGeometry<'a> {
             Entity::Plane { normal, constant } => Self::Plane { normal, constant },
             Entity::MeshFile { file, scale } => Self::MeshFile { file, scale },
             Entity::ConvexMesh { vertices, scale } => Self::ConvexMesh { vertices, scale },
-            Entity::Mesh {
-                vertices,
-                indices,
-                scale,
-            } => Self::Mesh {
-                vertices,
-                indices,
-                scale,
-            },
+            Entity::Mesh { vertices, indices, scale } => Self::Mesh { vertices, indices, scale },
         }
     }
 }
@@ -510,19 +490,13 @@ pub struct CollisionShapeOptions {
 
 impl Default for CollisionShapeOptions {
     fn default() -> Self {
-        Self {
-            transform: na::Isometry3::identity(),
-            flags: None,
-        }
+        Self { transform: na::Isometry3::identity(), flags: None }
     }
 }
 
 impl From<na::Isometry3<f64>> for CollisionShapeOptions {
     fn from(transform: na::Isometry3<f64>) -> Self {
-        Self {
-            transform,
-            flags: None,
-        }
+        Self { transform, flags: None }
     }
 }
 
@@ -531,10 +505,7 @@ where
     T: Into<na::Isometry3<f64>>,
 {
     fn from(value: (T, Option<i32>)) -> Self {
-        Self {
-            transform: value.0.into(),
-            flags: value.1,
-        }
+        Self { transform: value.0.into(), flags: value.1 }
     }
 }
 
@@ -590,24 +561,16 @@ impl<'a> From<Entity<'a>> for VisualGeometry<'a> {
             Entity::Cylinder { radius, height } => Self::Cylinder { radius, height },
             Entity::Plane { normal, constant } => Self::Plane { normal, constant },
             Entity::MeshFile { file, scale } => Self::Mesh { file, scale },
-            Entity::Mesh {
-                vertices,
-                indices,
-                scale,
-            } => Self::MeshData {
+            Entity::Mesh { vertices, indices, scale } => Self::MeshData {
                 vertices,
                 indices: Some(indices),
                 normals: None,
                 uvs: None,
                 scale,
             },
-            Entity::ConvexMesh { vertices, scale } => Self::MeshData {
-                vertices,
-                indices: None,
-                normals: None,
-                uvs: None,
-                scale,
-            },
+            Entity::ConvexMesh { vertices, scale } => {
+                Self::MeshData { vertices, indices: None, normals: None, uvs: None, scale }
+            }
         }
     }
 }
@@ -642,10 +605,7 @@ impl Default for VisualShapeOptions {
 
 impl From<na::Isometry3<f64>> for VisualShapeOptions {
     fn from(transform: na::Isometry3<f64>) -> Self {
-        Self {
-            transform,
-            ..Default::default()
-        }
+        Self { transform, ..Default::default() }
     }
 }
 
@@ -967,10 +927,7 @@ impl TryFrom<b3LinkState> for LinkState {
             world_aabb: if value.m_world_linear_velocity != [0.0; 3]
                 || value.m_world_angular_velocity != [0.0; 3]
             {
-                Some(Aabb {
-                    min: value.m_world_aabb_min,
-                    max: value.m_world_aabb_max,
-                })
+                Some(Aabb { min: value.m_world_aabb_min, max: value.m_world_aabb_max })
             } else {
                 None
             },
@@ -1488,11 +1445,7 @@ pub struct CameraImageOptions {
 
 impl CameraImageOptions {
     pub fn new(width: i32, height: i32) -> Self {
-        Self {
-            width,
-            height,
-            ..Self::default()
-        }
+        Self { width, height, ..Self::default() }
     }
 }
 
@@ -1588,12 +1541,7 @@ pub struct DebugParameterOptions<'a> {
 
 impl Default for DebugParameterOptions<'_> {
     fn default() -> Self {
-        Self {
-            name: "",
-            range_min: 0.0,
-            range_max: 1.0,
-            start_value: 0.0,
-        }
+        Self { name: "", range_min: 0.0, range_max: 1.0, start_value: 0.0 }
     }
 }
 
@@ -1816,18 +1764,13 @@ impl MouseButtonState {
 impl From<b3MouseEvent> for MouseEvent {
     fn from(event: b3MouseEvent) -> Self {
         if event.m_eventType == 0 {
-            Self::Move {
-                mouse_x: event.m_mousePosX,
-                mouse_y: event.m_mousePosY,
-            }
+            Self::Move { mouse_x: event.m_mousePosX, mouse_y: event.m_mousePosY }
         } else {
             Self::Button {
                 mouse_x: event.m_mousePosX,
                 mouse_y: event.m_mousePosY,
                 button_index: event.m_buttonIndex,
-                button_state: MouseButtonState {
-                    flag: event.m_buttonState,
-                },
+                button_state: MouseButtonState { flag: event.m_buttonState },
             }
         }
     }

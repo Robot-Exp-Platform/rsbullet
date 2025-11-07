@@ -11,11 +11,7 @@ fn main() -> BulletResult<()> {
     client.load_urdf("table/table", Some([0.5, 0., -0.82]))?;
     let arm = client.load_urdf(
         "widowx/widowx.urdf",
-        Some(UrdfOptions {
-            use_fixed_base: true,
-
-            ..Default::default()
-        }),
+        Some(UrdfOptions { use_fixed_base: true, ..Default::default() }),
     )?;
 
     client.reset_base_position_and_orientation(

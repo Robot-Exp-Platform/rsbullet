@@ -47,17 +47,11 @@ fn main() -> BulletResult<()> {
         None::<CollisionShapeOptions>,
     )?;
     let stone = client.create_collision_shape(
-        &CollisionGeometry::Mesh {
-            vertices: &VERTICES,
-            indices: &INDICES,
-            scale: [0.; 3],
-        },
+        &CollisionGeometry::Mesh { vertices: &VERTICES, indices: &INDICES, scale: [0.; 3] },
         None::<CollisionShapeOptions>,
     )?;
     let col_box = client.create_collision_shape(
-        &CollisionGeometry::Box {
-            half_extents: [0.5, 2.5, 00.1],
-        },
+        &CollisionGeometry::Box { half_extents: [0.5, 2.5, 00.1] },
         None::<CollisionShapeOptions>,
     )?;
 

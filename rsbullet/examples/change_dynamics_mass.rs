@@ -20,19 +20,13 @@ fn main() -> BulletResult<()> {
     )?;
     let cube_2 = client.load_urdf(
         "cube.urdf",
-        Some(UrdfOptions {
-            use_fixed_base: true,
-            ..Default::default()
-        }),
+        Some(UrdfOptions { use_fixed_base: true, ..Default::default() }),
     )?;
 
     client.change_dynamics(
         cube_2,
         -1,
-        &DynamicsUpdate {
-            mass: Some(1.),
-            ..Default::default()
-        },
+        &DynamicsUpdate { mass: Some(1.), ..Default::default() },
     )?;
 
     while client.is_connected() {

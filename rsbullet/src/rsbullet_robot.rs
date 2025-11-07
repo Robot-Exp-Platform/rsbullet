@@ -6,7 +6,7 @@ use anyhow::Result;
 use robot_behavior::behavior::{Arm, ArmParam, ArmPreplannedMotionImpl};
 use robot_behavior::utils::{isometry_to_raw_parts, path_generate};
 use robot_behavior::{
-    ArmState, Coord, EntityBuilder, LoadState, Pose, RobotException, RobotFile, RobotResult,
+    ArmState, Coord, LoadState, Pose, RobotException, RobotFile, RobotResult, behavior::*,
 };
 use rsbullet_core::{
     BulletError, BulletResult, ControlModeArray, InverseKinematicsOptions, LoadModelFlags,
@@ -127,10 +127,7 @@ impl<'a, R> EntityBuilder<'a> for RsBulletRobotBuilder<'a, R> {
         } else {
             None
         };
-        let state_cache = Arc::new(Mutex::new(RsBulletRobotState {
-            joint_states,
-            link_state,
-        }));
+        let state_cache = Arc::new(Mutex::new(RsBulletRobotState { joint_states, link_state }));
 
         let cache_clone = state_cache.clone();
         let joint_indices_clone = joint_indices.clone();
@@ -236,6 +233,26 @@ where
     }
 }
 
+impl<const N: usize, R> ArmParam<N> for RsBulletRobot<R>
+where
+    R: ArmParam<N>,
+{
+    const JOINT_DEFAULT: [f64; N] = R::JOINT_DEFAULT;
+    const JOINT_MIN: [f64; N] = R::JOINT_MIN;
+    const JOINT_MAX: [f64; N] = R::JOINT_MAX;
+    const JOINT_VEL_BOUND: [f64; N] = R::JOINT_VEL_BOUND;
+    const JOINT_ACC_BOUND: [f64; N] = R::JOINT_ACC_BOUND;
+    const JOINT_JERK_BOUND: [f64; N] = R::JOINT_JERK_BOUND;
+    const CARTESIAN_VEL_BOUND: f64 = R::CARTESIAN_VEL_BOUND;
+    const CARTESIAN_ACC_BOUND: f64 = R::CARTESIAN_ACC_BOUND;
+    const CARTESIAN_JERK_BOUND: f64 = R::CARTESIAN_JERK_BOUND;
+    const ROTATION_VEL_BOUND: f64 = R::ROTATION_VEL_BOUND;
+    const ROTATION_ACC_BOUND: f64 = R::ROTATION_ACC_BOUND;
+    const ROTATION_JERK_BOUND: f64 = R::ROTATION_JERK_BOUND;
+    const TORQUE_BOUND: [f64; N] = R::TORQUE_BOUND;
+    const TORQUE_DOT_BOUND: [f64; N] = R::TORQUE_DOT_BOUND;
+}
+
 impl<const N: usize, R> ArmPreplannedMotionImpl<N> for RsBulletRobot<R>
 where
     R: ArmParam<N>,
@@ -339,6 +356,103 @@ where
             )?;
 
             Ok(duration >= t_max)
+        })
+        .map_err(Into::into)
+    }
+}
+
+// impl<R, const N: usize> ArmStreamingMotion<N> for RsBulletRobot<R>
+// where
+//     R: ArmParam<N>,
+// {
+//     type Handle = ;
+//     fn control_with_target(&mut self) -> Arc<Mutex<Option<robot_behavior::ControlType<N>>>> {}
+//     fn move_to_target(&mut self) -> Arc<Mutex<Option<robot_behavior::MotionType<N>>>> {}
+//     fn end_streaming(&mut self) -> RobotResult<()> {}
+//     fn start_streaming(&mut self) -> RobotResult<Self::Handle> {}
+// }
+
+impl<R, const N: usize> ArmRealtimeControl<N> for RsBulletRobot<R>
+where
+    R: ArmParam<N>,
+{
+    fn control_with_closure<FC>(&mut self, mut closure: FC) -> RobotResult<()>
+    where
+        FC: FnMut(ArmState<N>, Duration) -> (robot_behavior::ControlType<N>, bool) + Send + 'static,
+    {
+        let body_id = self.body_id;
+        let joint_indices = self.joint_indices.clone();
+        let cache_clone = self.state_cache.clone();
+        self.enqueue(move |client, dt| {
+            let state = {
+                let cache = cache_clone.lock().map_err(|_| {
+                    RobotException::NetworkError("state cache poisoned".to_string())
+                })?;
+                cache.clone().into()
+            };
+            let (control, done) = closure(state, dt);
+
+            match control {
+                robot_behavior::ControlType::Torque(torque) => {
+                    client.set_joint_motor_control_array(
+                        body_id,
+                        &joint_indices[1..=N],
+                        ControlModeArray::Torque(&torque),
+                        None,
+                    )?;
+                }
+                robot_behavior::ControlType::Zero => {
+                    let zero_torque = vec![0.0; N];
+                    client.set_joint_motor_control_array(
+                        body_id,
+                        &joint_indices[1..=N],
+                        ControlModeArray::Torque(&zero_torque),
+                        None,
+                    )?;
+                }
+            }
+
+            Ok(done)
+        })
+        .map_err(Into::into)
+    }
+    fn move_with_closure<FM>(&mut self, mut closure: FM) -> RobotResult<()>
+    where
+        FM: FnMut(ArmState<N>, Duration) -> (robot_behavior::MotionType<N>, bool) + Send + 'static,
+    {
+        let body_id = self.body_id;
+        let joint_indices = self.joint_indices.clone();
+        let cache_clone = self.state_cache.clone();
+        self.enqueue(move |client, dt| {
+            let state = {
+                let cache = cache_clone.lock().map_err(|_| {
+                    RobotException::NetworkError("state cache poisoned".to_string())
+                })?;
+                cache.clone().into()
+            };
+            let (motion, done) = closure(state, dt);
+
+            match motion {
+                robot_behavior::MotionType::Position(target) => {
+                    client.set_joint_motor_control_array(
+                        body_id,
+                        &joint_indices[1..=N],
+                        ControlModeArray::Position(&target),
+                        None,
+                    )?;
+                }
+                robot_behavior::MotionType::JointVel(vel) => {
+                    client.set_joint_motor_control_array(
+                        body_id,
+                        &joint_indices[1..=N],
+                        ControlModeArray::Velocity(&vel),
+                        None,
+                    )?;
+                }
+                _ => {}
+            }
+
+            Ok(done)
         })
         .map_err(Into::into)
     }

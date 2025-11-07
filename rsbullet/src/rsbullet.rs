@@ -185,17 +185,11 @@ mod tests {
         let mesh_scale = [0.1, 0.1, 0.1];
 
         let _visual_shape = engine
-            .visual(Entity::MeshFile {
-                file: "duck.obj",
-                scale: mesh_scale,
-            })
+            .visual(Entity::MeshFile { file: "duck.obj", scale: mesh_scale })
             .base(shift)
             .load()?;
         let _collision_shape = engine
-            .collision(Entity::MeshFile {
-                file: "duck_vhacd.obj",
-                scale: mesh_scale,
-            })
+            .collision(Entity::MeshFile { file: "duck_vhacd.obj", scale: mesh_scale })
             .base(shift)
             .load()?;
 
