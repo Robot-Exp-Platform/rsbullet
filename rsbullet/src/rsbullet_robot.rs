@@ -3,7 +3,7 @@ use std::time::Duration;
 use std::{marker::PhantomData, sync::mpsc::Sender};
 
 use anyhow::Result;
-use robot_behavior::behavior::{Arm, ArmParam, ArmPreplannedMotionImpl};
+use robot_behavior::behavior::{Arm, ArmParam};
 use robot_behavior::utils::{isometry_to_raw_parts, path_generate};
 use robot_behavior::{
     ArmState, Coord, LoadState, Pose, RobotException, RobotFile, RobotResult, behavior::*,
@@ -253,7 +253,7 @@ where
     const TORQUE_DOT_BOUND: [f64; N] = R::TORQUE_DOT_BOUND;
 }
 
-impl<const N: usize, R> ArmPreplannedMotionImpl<N> for RsBulletRobot<R>
+impl<const N: usize, R> ArmPreplannedMotion<N> for RsBulletRobot<R>
 where
     R: ArmParam<N>,
 {
