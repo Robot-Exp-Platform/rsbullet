@@ -6,7 +6,8 @@ use anyhow::Result;
 use robot_behavior::behavior::{Arm, ArmParam};
 use robot_behavior::utils::{isometry_to_raw_parts, path_generate};
 use robot_behavior::{
-    ArmState, Coord, LoadState, Pose, RobotException, RobotFile, RobotResult, behavior::*,
+    ArmPreplannedPath, ArmState, Coord, LoadState, MotionType, Pose, RobotException, RobotFile,
+    RobotResult, behavior::*,
 };
 use rsbullet_core::{
     BulletError, BulletResult, ControlModeArray, InverseKinematicsOptions, LoadModelFlags,
@@ -356,6 +357,86 @@ where
             )?;
 
             Ok(duration >= t_max)
+        })
+        .map_err(Into::into)
+    }
+}
+
+impl<const N: usize, R> ArmPreplannedPath<N> for RsBulletRobot<R>
+where
+    R: ArmParam<N>,
+{
+    fn move_traj(&mut self, path: Vec<robot_behavior::MotionType<N>>) -> RobotResult<()> {
+        self.move_traj_async(path)
+    }
+    fn move_traj_async(&mut self, path: Vec<robot_behavior::MotionType<N>>) -> RobotResult<()> {
+        let body_id = self.body_id;
+        let joint_indices = self.joint_indices.clone();
+        let mut path = path.into_iter();
+
+        self.enqueue(move |client, _| match path.next() {
+            Some(MotionType::Joint(joint)) => {
+                client.set_joint_motor_control_array(
+                    body_id,
+                    &joint_indices[1..=N],
+                    ControlModeArray::Position(&joint),
+                    None,
+                )?;
+                Ok(false)
+            }
+
+            Some(MotionType::Cartesian(pose)) => {
+                if joint_indices.len() < 2 {
+                    return Err(BulletError::CommandFailed {
+                        message: "robot has no movable joints",
+                        code: -1,
+                    });
+                }
+
+                let (target_position, _) = isometry_to_raw_parts(&pose.quat());
+
+                let states = client.get_joint_states(body_id, &joint_indices)?;
+                if states.len() != joint_indices.len() {
+                    return Err(BulletError::CommandFailed {
+                        message: "joint/control cardinality mismatch",
+                        code: states.len() as i32,
+                    });
+                }
+                let current_positions: Vec<f64> =
+                    states.iter().map(|state| state.position).collect();
+                let ik_options = InverseKinematicsOptions::<'_> {
+                    current_positions: Some(&current_positions),
+                    ..Default::default()
+                };
+
+                let solution = client.calculate_inverse_kinematics(
+                    body_id,
+                    joint_indices.len() as i32 - 1,
+                    target_position,
+                    &ik_options,
+                )?;
+
+                if solution.len() < joint_indices.len() {
+                    return Err(BulletError::CommandFailed {
+                        message: "inverse kinematics returned insufficient joint values",
+                        code: solution.len() as i32,
+                    });
+                }
+
+                client.set_joint_motor_control_array(
+                    body_id,
+                    &joint_indices[1..=N],
+                    ControlModeArray::Position(&solution[..joint_indices.len()]),
+                    None,
+                )?;
+
+                Ok(false)
+            }
+            None => Ok(true),
+            _ => Err(BulletError::CommandFailed {
+                message: "unsupported motion type in preplanned path",
+                code: -1,
+            }),
         })
         .map_err(Into::into)
     }
