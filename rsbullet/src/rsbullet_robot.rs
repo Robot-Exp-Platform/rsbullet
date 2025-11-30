@@ -318,20 +318,10 @@ where
         self.enqueue(move |client, dt| {
             duration += dt;
 
-            let states = client.get_joint_states(body_id, &joint_indices)?;
-            if states.len() != joint_indices.len() {
-                return Err(BulletError::CommandFailed {
-                    message: "joint/control cardinality mismatch",
-                    code: states.len() as i32,
-                });
-            }
-
             let target_pose = path_generate(duration);
             let (target_position, _) = isometry_to_raw_parts(&target_pose);
 
-            let current_positions: Vec<f64> = states.iter().map(|state| state.position).collect();
             let ik_options = InverseKinematicsOptions::<'_> {
-                current_positions: Some(&current_positions),
                 ..Default::default()
             };
 
@@ -342,7 +332,7 @@ where
                 &ik_options,
             )?;
 
-            if solution.len() < joint_indices.len() {
+            if solution.len() < N {
                 return Err(BulletError::CommandFailed {
                     message: "inverse kinematics returned insufficient joint values",
                     code: solution.len() as i32,
@@ -352,7 +342,7 @@ where
             client.set_joint_motor_control_array(
                 body_id,
                 &joint_indices[1..=N],
-                ControlModeArray::Position(&solution[..joint_indices.len()]),
+                ControlModeArray::Position(&solution[..N]),
                 None,
             )?;
 
@@ -395,17 +385,7 @@ where
 
                 let (target_position, _) = isometry_to_raw_parts(&pose.quat());
 
-                let states = client.get_joint_states(body_id, &joint_indices)?;
-                if states.len() != joint_indices.len() {
-                    return Err(BulletError::CommandFailed {
-                        message: "joint/control cardinality mismatch",
-                        code: states.len() as i32,
-                    });
-                }
-                let current_positions: Vec<f64> =
-                    states.iter().map(|state| state.position).collect();
                 let ik_options = InverseKinematicsOptions::<'_> {
-                    current_positions: Some(&current_positions),
                     ..Default::default()
                 };
 
@@ -416,7 +396,7 @@ where
                     &ik_options,
                 )?;
 
-                if solution.len() < joint_indices.len() {
+                if solution.len() < N {
                     return Err(BulletError::CommandFailed {
                         message: "inverse kinematics returned insufficient joint values",
                         code: solution.len() as i32,
@@ -426,7 +406,7 @@ where
                 client.set_joint_motor_control_array(
                     body_id,
                     &joint_indices[1..=N],
-                    ControlModeArray::Position(&solution[..joint_indices.len()]),
+                    ControlModeArray::Position(&solution[..N]),
                     None,
                 )?;
 
