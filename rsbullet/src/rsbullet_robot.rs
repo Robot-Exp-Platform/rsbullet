@@ -321,9 +321,7 @@ where
             let target_pose = path_generate(duration);
             let (target_position, _) = isometry_to_raw_parts(&target_pose);
 
-            let ik_options = InverseKinematicsOptions::<'_> {
-                ..Default::default()
-            };
+            let ik_options = InverseKinematicsOptions::<'_> { ..Default::default() };
 
             let solution = client.calculate_inverse_kinematics(
                 body_id,
@@ -385,9 +383,7 @@ where
 
                 let (target_position, _) = isometry_to_raw_parts(&pose.quat());
 
-                let ik_options = InverseKinematicsOptions::<'_> {
-                    ..Default::default()
-                };
+                let ik_options = InverseKinematicsOptions::<'_> { ..Default::default() };
 
                 let solution = client.calculate_inverse_kinematics(
                     body_id,
