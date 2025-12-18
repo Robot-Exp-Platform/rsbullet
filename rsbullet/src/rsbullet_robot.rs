@@ -189,11 +189,11 @@ where
         self
     }
 
-    fn set_speed(&mut self, _speed: f64) -> RobotResult<()> {
+    fn set_scale(&mut self, _scale: f64) -> RobotResult<()> {
         Ok(())
     }
 
-    fn with_speed(&mut self, _speed: f64) -> &mut Self {
+    fn with_scale(&mut self, _scale: f64) -> &mut Self {
         self
     }
 
