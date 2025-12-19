@@ -133,8 +133,12 @@ mod tests {
 
     use nalgebra as na;
     use robot_behavior::{AddCollision, AddRobot, AddVisual, Entity, EntityBuilder, PhysicsEngine};
-    use roplat_exrobot::ExRobot;
     use rsbullet_core::{LoadModelFlags, Mode};
+
+    struct ExRobot<const N: usize>;
+    impl robot_behavior::RobotFile for ExRobot<6> {
+        const URDF: &'static str = "robot.urdf";
+    }
 
     use crate::{RsBullet, rsbullet_robot::RsBulletRobotBuilder};
 
