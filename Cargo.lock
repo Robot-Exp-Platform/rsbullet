@@ -983,23 +983,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "roplat_exrobot"
-version = "0.1.2"
-dependencies = [
- "anyhow",
- "cxx-build",
- "nalgebra",
- "robot_behavior",
-]
-
-[[package]]
 name = "rsbullet"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
  "anyhow",
  "nalgebra",
  "robot_behavior",
- "roplat_exrobot",
  "rsbullet-core",
  "rsbullet_sys",
 ]
