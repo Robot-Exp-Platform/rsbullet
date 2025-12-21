@@ -281,7 +281,7 @@ where
             let target = path_generate(duration);
             client.set_joint_motor_control_array(
                 body_id,
-                &joint_indices[1..=N],
+                &joint_indices[0..N],
                 ControlModeArray::Position(&target),
                 None,
             )?;
@@ -339,7 +339,7 @@ where
 
             client.set_joint_motor_control_array(
                 body_id,
-                &joint_indices[1..=N],
+                &joint_indices[0..N],
                 ControlModeArray::Position(&solution[..N]),
                 None,
             )?;
@@ -366,7 +366,7 @@ where
             Some(MotionType::Joint(joint)) => {
                 client.set_joint_motor_control_array(
                     body_id,
-                    &joint_indices[1..=N],
+                    &joint_indices [0..N],
                     ControlModeArray::Position(&joint),
                     None,
                 )?;
@@ -401,7 +401,7 @@ where
 
                 client.set_joint_motor_control_array(
                     body_id,
-                    &joint_indices[1..=N],
+                    &joint_indices[0..N],
                     ControlModeArray::Position(&solution[..N]),
                     None,
                 )?;
@@ -453,7 +453,7 @@ where
                 robot_behavior::ControlType::Torque(torque) => {
                     client.set_joint_motor_control_array(
                         body_id,
-                        &joint_indices[1..=N],
+                        &joint_indices [0..N],
                         ControlModeArray::Torque(&torque),
                         None,
                     )?;
@@ -462,7 +462,7 @@ where
                     let zero_torque = vec![0.0; N];
                     client.set_joint_motor_control_array(
                         body_id,
-                        &joint_indices[1..=N],
+                        &joint_indices [0..N],
                         ControlModeArray::Torque(&zero_torque),
                         None,
                     )?;
@@ -493,7 +493,7 @@ where
                 robot_behavior::MotionType::Position(target) => {
                     client.set_joint_motor_control_array(
                         body_id,
-                        &joint_indices[1..=N],
+                        &joint_indices [0..N],
                         ControlModeArray::Position(&target),
                         None,
                     )?;
@@ -501,7 +501,7 @@ where
                 robot_behavior::MotionType::JointVel(vel) => {
                     client.set_joint_motor_control_array(
                         body_id,
-                        &joint_indices[1..=N],
+                        &joint_indices [0..N],
                         ControlModeArray::Velocity(&vel),
                         None,
                     )?;
