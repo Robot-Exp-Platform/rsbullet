@@ -10,8 +10,8 @@ use robot_behavior::{
     RobotResult, behavior::*,
 };
 use rsbullet_core::{
-    BulletError, BulletResult, ControlModeArray, InverseKinematicsOptions, LoadModelFlags,
-    PhysicsClient, UrdfOptions,
+    BulletError, BulletResult, ControlModeArray, InverseKinematicsOptions, JointType,
+    LoadModelFlags, PhysicsClient, UrdfOptions,
 };
 
 use crate::RsBullet;
@@ -107,7 +107,14 @@ impl<'a, R> EntityBuilder<'a> for RsBulletRobotBuilder<'a, R> {
         )?;
 
         let joint_count = self.rsbullet.client_mut().get_num_joints(body_id);
-        let joint_indices: Vec<i32> = (0..joint_count).collect();
+        let mut joint_indices = Vec::new();
+        for i in 0..joint_count {
+            let info = self.rsbullet.client_mut().get_joint_info(body_id, i)?;
+            if matches!(info.joint_type, JointType::Revolute | JointType::Prismatic) {
+                joint_indices.push(i);
+            }
+        }
+
         let end_effector_link = if joint_count == 0 {
             -1
         } else {
