@@ -19,9 +19,9 @@ impl<const N: usize> From<RsBulletRobotState> for ArmState<N> {
         let mut torque = [0.; N];
 
         for i in 0..N {
-            joint[i] = value.joint_states[i + 1].position;
-            joint_vel[i] = value.joint_states[i + 1].velocity;
-            torque[i] = value.joint_states[i + 1].motor_torque;
+            joint[i] = value.joint_states[i].position;
+            joint_vel[i] = value.joint_states[i].velocity;
+            torque[i] = value.joint_states[i].motor_torque;
         }
 
         let (pose, pose_vel) = if let Some(link_state) = &value.link_state {
