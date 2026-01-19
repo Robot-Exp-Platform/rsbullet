@@ -93,9 +93,9 @@ checksum = "b35204fbdc0b3f4446b89fc1ac2cf84a8a68971995d0bf2e925ec7cd960f9cb3"
 
 [[package]]
 name = "cc"
-version = "1.2.40"
+version = "1.2.53"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e1d05d92f4b1fd76aad469d46cdd858ca761576082cd37df81416691e50199fb"
+checksum = "755d2fce177175ffca841e9a06afdb2c4ab0f593d53b4dee48147dfaade85932"
 dependencies = [
  "find-msvc-tools",
  "shlex",
@@ -123,9 +123,9 @@ dependencies = [
 
 [[package]]
 name = "cmake"
-version = "0.1.54"
+version = "0.1.57"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e7caa3f9de89ddbe2c607f4101924c5abec803763ae9534e4f4d7d8f84aa81f0"
+checksum = "75443c44cd6b379beb8c5b45d85d0773baf31cce901fe7bb252f4eff3008ef7d"
 dependencies = [
  "cc",
 ]
@@ -333,9 +333,9 @@ dependencies = [
 
 [[package]]
 name = "find-msvc-tools"
-version = "0.1.3"
+version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0399f9d26e5191ce32c498bebd31e7a3ceabc2745f0ac54af3f335126c3f24b3"
+checksum = "8591b0bcc8a98a64310a2fae1bb3e9b8564dd10e381e6e28010fde8e8e8568db"
 
 [[package]]
 name = "flate2"
@@ -1182,7 +1182,7 @@ dependencies = [
 
 [[package]]
 name = "rsbullet"
-version = "0.3.7"
+version = "0.3.9"
 dependencies = [
  "anyhow",
  "nalgebra",
@@ -1193,7 +1193,7 @@ dependencies = [
 
 [[package]]
 name = "rsbullet-core"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "bitflags 2.9.4",
  "nalgebra",
@@ -1203,7 +1203,7 @@ dependencies = [
 
 [[package]]
 name = "rsbullet_sys"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "cmake",
 ]
