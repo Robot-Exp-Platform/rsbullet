@@ -1133,9 +1133,9 @@ dependencies = [
 
 [[package]]
 name = "robot_behavior"
-version = "0.5.2"
+version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "736cd783e0cb4742f473b10a64398e50b480e0fc219f15ffd03f0ffa93dbd3b4"
+checksum = "12d4756ec24cd32f3a47a3b0373059927394423ea62b6c3c4ce499fd1a6758c5"
 dependencies = [
  "anyhow",
  "cxx-build",
@@ -1182,7 +1182,7 @@ dependencies = [
 
 [[package]]
 name = "rsbullet"
-version = "0.3.9"
+version = "0.3.10"
 dependencies = [
  "anyhow",
  "nalgebra",
@@ -1193,7 +1193,7 @@ dependencies = [
 
 [[package]]
 name = "rsbullet-core"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "bitflags 2.9.4",
  "nalgebra",

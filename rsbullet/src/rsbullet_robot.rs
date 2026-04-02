@@ -497,7 +497,7 @@ where
             let (motion, done) = closure(state, dt);
 
             match motion {
-                robot_behavior::MotionType::Position(target) => {
+                robot_behavior::MotionType::Joint(target) => {
                     client.set_joint_motor_control_array(
                         body_id,
                         &joint_indices[0..N],
