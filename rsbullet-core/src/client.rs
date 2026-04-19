@@ -28,6 +28,11 @@ pub struct PhysicsClient {
     mode: Mode,
 }
 
+// SAFETY: PhysicsClient 是对 Bullet C API 不透明句柄的薄封装。
+// 每个 client handle 是独立的实例，同一时刻只有唯一持有者使用，
+// 在线程间移动（Send）是安全的。不实现 Sync 因为不应在多线程中同时访问。
+unsafe impl Send for PhysicsClient {}
+
 // Per-process GUI guard: 0 = free, 1 = occupied
 static GUI_GUARD: AtomicUsize = AtomicUsize::new(0);
 // Process-wide counters to mirror PyBullet statistics
@@ -2735,8 +2740,11 @@ impl PhysicsClient {
         )?;
 
         let mut out_dof = 0;
-        let mut linear = vec![0.0_f64; 3 * dof];
-        let mut angular = vec![0.0_f64; 3 * dof];
+        // Allocate extra space: the C API may report more DOFs than the
+        // user-supplied joint_positions (e.g. gripper joints).
+        let buf_size = 3 * (dof + 4);
+        let mut linear = vec![0.0_f64; buf_size];
+        let mut angular = vec![0.0_f64; buf_size];
         let success = unsafe {
             ffi::b3GetStatusJacobian(
                 status.handle,
@@ -2751,7 +2759,7 @@ impl PhysicsClient {
                 code: success,
             });
         }
-        let out_cols = out_dof as usize;
+        let out_cols = (out_dof as usize).min(dof);
         if out_cols == 0 {
             return Ok(Jacobian::zeros(0));
         }

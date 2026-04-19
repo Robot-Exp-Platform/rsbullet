@@ -1185,10 +1185,12 @@ name = "rsbullet"
 version = "0.3.10"
 dependencies = [
  "anyhow",
+ "futures",
  "nalgebra",
  "robot_behavior",
  "rsbullet-core",
  "rsbullet_sys",
+ "tokio",
 ]
 
 [[package]]
