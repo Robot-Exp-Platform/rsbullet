@@ -324,6 +324,7 @@ impl<const N: usize, R> ArmParam<N> for RsBulletRobot<R>
 where
     R: ArmParam<N>,
 {
+    const CONTROL_PERIOD: f64 = R::CONTROL_PERIOD;
     const JOINT_DEFAULT: [f64; N] = R::JOINT_DEFAULT;
     const JOINT_MIN: [f64; N] = R::JOINT_MIN;
     const JOINT_MAX: [f64; N] = R::JOINT_MAX;
