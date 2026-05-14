@@ -355,7 +355,7 @@ where
 
         let state = self.state()?;
         let (path_generate, t_max) = path_generate::joint_s_curve(
-            &state.joint.unwrap_or([0.; N]),
+            &state.measured.joint.unwrap_or([0.; N]),
             target,
             &R::JOINT_VEL_BOUND,
             &R::JOINT_ACC_BOUND,
@@ -395,7 +395,7 @@ where
 
         let state = self.state()?;
         let (path_generate, t_max) = path_generate::cartesian_quat_simple_4th_curve(
-            state.pose_o_to_ee.unwrap_or_default().quat(),
+            state.measured.pose_o_to_ee.unwrap_or_default().quat(),
             target.quat(),
             R::ROTATION_VEL_BOUND,
             R::ROTATION_ACC_BOUND,
@@ -785,8 +785,8 @@ where
                 cache.clone().into()
             };
 
-            let q = state.joint.unwrap_or([0.; N]);
-            let dq = state.joint_vel.unwrap_or([0.; N]);
+            let q = state.measured.joint.unwrap_or([0.; N]);
+            let dq = state.measured.joint_vel.unwrap_or([0.; N]);
             let target = {
                 let t = target_clone.lock().unwrap();
                 t.unwrap_or(q)
@@ -865,9 +865,9 @@ where
                 cache.clone().into()
             };
 
-            let q = state.joint.unwrap_or([0.; N]);
-            let dq = state.joint_vel.unwrap_or([0.; N]);
-            let current_pose = state.pose_o_to_ee.unwrap_or_default();
+            let q = state.measured.joint.unwrap_or([0.; N]);
+            let dq = state.measured.joint_vel.unwrap_or([0.; N]);
+            let current_pose = state.measured.pose_o_to_ee.unwrap_or_default();
 
             let target_pose = {
                 let t = target_clone.lock().unwrap();
