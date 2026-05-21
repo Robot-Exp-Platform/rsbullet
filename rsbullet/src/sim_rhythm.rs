@@ -7,10 +7,10 @@ use roplat::rhythm::Rhythm;
 
 use crate::RsBullet;
 
-/// 仿真步进节律源
+/// 仿真步进节律�?
 ///
-/// 按固定周期驱动 `RsBullet` 物理引擎步进，每个 tick 调用 `engine.step()`
-/// 后 yield `()` 给下游节点（可用于挂载观测/记录等节点）。
+/// 按固定周期驱�?`RsBullet` 物理引擎步进，每�?tick 调用 `engine.step()`
+/// �?yield `()` 给下游节点（可用于挂载观�?记录等节点）�?
 ///
 /// ```ignore
 /// let mut sim_rhythm = SimRhythm::new(engine, Duration::from_secs_f64(1.0 / 240.0));
@@ -38,7 +38,11 @@ impl Rhythm for SimRhythm {
     type Output = ();
     type Error = RoplatError;
 
-    async fn drive<N, F, Fut>(&mut self, mut nodes: N, mut op_domain: F)
+    async fn drive<N, F, Fut>(
+        &mut self,
+        mut nodes: N,
+        mut op_domain: F,
+    ) -> ((), N)
     where
         N: Send,
         F: FnMut(N, Self::Yield) -> Fut + Send,
