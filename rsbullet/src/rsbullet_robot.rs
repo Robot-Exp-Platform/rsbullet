@@ -801,6 +801,7 @@ where
             }
 
             // 扭矩限幅，避免仿真发散。
+            #[allow(clippy::needless_range_loop)]
             for i in 0..N {
                 let tau = torque[i];
                 let limit = R::TORQUE_BOUND[i].abs();
@@ -923,6 +924,7 @@ where
             }
 
             // 扭矩限幅，避免控制力不足或过大震荡。
+            #[allow(clippy::needless_range_loop)]
             for i in 0..N {
                 let tau = torque[i];
                 let limit = R::TORQUE_BOUND[i].abs();
