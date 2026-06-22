@@ -1,6 +1,6 @@
-use std::time::Duration;
+﻿use std::time::Duration;
 
-use robot_behavior::{ArmState, ArmStateSample};
+use robot_behavior::{ArmState, JointSample, SpatialSample, StateView};
 use rsbullet_core::{BulletResult, JointState, LinkState, PhysicsClient};
 
 pub(crate) type QueuedControl =
@@ -31,15 +31,19 @@ impl<const N: usize> From<RsBulletRobotState> for ArmState<N> {
         };
 
         ArmState {
-            measured: ArmStateSample {
-                joint: Some(joint),
-                joint_vel: Some(joint_vel),
-                joint_acc: None,
-                torque: Some(torque),
-                pose_o_to_ee: pose,
-                pose_ee_to_k: None,
-                cartesian_vel: pose_vel,
-            },
+            joint: StateView::from_meas(JointSample {
+                q: Some(joint),
+                dq: Some(joint_vel),
+                ddq: None,
+                tau: Some(torque),
+                dtau: None,
+            }),
+            flange: StateView::from_meas(SpatialSample {
+                pose,
+                vel: pose_vel,
+                acc: None,
+                wrench: None,
+            }),
             load: None,
             ..Default::default()
         }

@@ -57,10 +57,10 @@ fn main() -> Result<()> {
         .load()?;
 
     // a s-curve motion
-    robot_1
-        .with_velocity(&[5.; 6])
-        .with_acceleration(&[2.; 6])
-        .move_joint(&[0.; 6])?;
+    robot_1 = robot_1
+        .with_joint_vel([5.; 6])
+        .with_joint_acc([2.; 6]);
+    Motion::move_to::<JointSpace<6>>(&mut robot_1, [0.; 6])?;
     
     loop {
         physics.step()?;

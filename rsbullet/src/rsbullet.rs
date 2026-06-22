@@ -1,7 +1,7 @@
 use std::{sync::mpsc, time::Duration};
 
 use robot_behavior::{
-    AddCollision, AddRobot, AddSearchPath, AddVisual, PhysicsEngine, Renderer, RobotFile,
+    AddCollision, AddRobot, AddSearchPath, AddVisual, PhysicsEngine, Renderer, RobotDescription,
 };
 use rsbullet_core::{BulletResult, Mode, PhysicsClient};
 
@@ -105,8 +105,11 @@ impl Renderer for RsBullet {}
 
 impl AddRobot for RsBullet {
     type PR<R> = RsBulletRobot<R>;
-    type RB<'a, R: RobotFile> = RsBulletRobotBuilder<'a, R>;
-    fn robot_builder<R: RobotFile>(&mut self, _name: impl ToString) -> RsBulletRobotBuilder<'_, R> {
+    type RB<'a, R: RobotDescription> = RsBulletRobotBuilder<'a, R>;
+    fn robot_builder<R: RobotDescription>(
+        &mut self,
+        _name: impl ToString,
+    ) -> RsBulletRobotBuilder<'_, R> {
         RsBulletRobotBuilder::new(self)
     }
 }
@@ -136,8 +139,8 @@ mod tests {
     use rsbullet_core::{LoadModelFlags, Mode};
 
     struct ExRobot<const N: usize>;
-    impl robot_behavior::RobotFile for ExRobot<6> {
-        const URDF: &'static str = "robot.urdf";
+    impl robot_behavior::RobotDescription for ExRobot<6> {
+        const URDF: Option<&'static str> = Some("robot.urdf");
     }
 
     use crate::{RsBullet, rsbullet_robot::RsBulletRobotBuilder};

@@ -1,20 +1,18 @@
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::{marker::PhantomData, sync::mpsc::Sender};
 
 use anyhow::Result;
-use futures::future::BoxFuture;
-use robot_behavior::behavior::{Arm, ArmParam};
+use robot_behavior::behavior::{Arm, EndPoint, FlangeSpace, JointSpace, Joints};
 use robot_behavior::utils::path_generate;
 use robot_behavior::{
-    ArmImpedance, ArmPreplannedPath, ArmState, CartesianImpedanceHandle, Coord,
-    JointImpedanceHandle, JointStateSync, LoadState, MotionType, Pose, RobotException, RobotFile,
-    RobotResult, behavior::*,
+    ArmState, ArmTorqueControl, CartesianVelocityControl, ControlWith, JointPositionControl,
+    JointVelocityControl, LoadState, MoveTo, MoveTraj, Pose, Robot, RobotDescription,
+    RobotException, RobotResult, TorqueControl, behavior::*,
 };
 use rsbullet_core::{
-    BulletError, BulletResult, ControlModeArray, InverseKinematicsOptions, JointType,
-    LoadModelFlags, PhysicsClient, UrdfOptions,
+    BulletError, BulletResult, ControlModeArray, JointType, LoadModelFlags, PhysicsClient,
+    UrdfOptions,
 };
 
 use crate::RsBullet;
@@ -59,12 +57,12 @@ pub struct RsBulletRobotBuilder<'a, R> {
     pub(crate) end_effector_link_name: Option<String>,
 }
 
-impl<'a, R: RobotFile> RsBulletRobotBuilder<'a, R> {
+impl<'a, R: RobotDescription> RsBulletRobotBuilder<'a, R> {
     pub fn new(rsbullet: &'a mut RsBullet) -> Self {
         RsBulletRobotBuilder {
             _marker: PhantomData,
             rsbullet,
-            load_file: R::URDF,
+            load_file: R::URDF.expect("robot description must provide a URDF path"),
             base: None,
             base_fixed: false,
             scaling: None,
@@ -86,13 +84,13 @@ impl<R> RsBulletRobotBuilder<'_, R> {
         self
     }
 
-    /// 显式指定末端 link 索引（Bullet joint index 语义）
+    /// Explicitly set the end-effector link index.
     pub fn end_effector_link(mut self, link_index: i32) -> Self {
         self.end_effector_link = Some(link_index);
         self
     }
 
-    /// 按 link 名称指定末端（优先于默认推断）
+    /// Set the end-effector link by link name.
     pub fn end_effector_link_name(mut self, link_name: impl Into<String>) -> Self {
         self.end_effector_link_name = Some(link_name.into());
         self
@@ -220,40 +218,9 @@ impl<'a, R> EntityBuilder<'a> for RsBulletRobotBuilder<'a, R> {
     }
 }
 
-impl<R: JointStateSync> AttachFrom<R> for RsBulletRobot<R> {
-    fn attach_from(self, from: &mut R) -> Result<()> {
-        let handle = from.joint_state_handle();
-        let body_id = self.body_id;
-        let joint_names = self.joint_names.clone();
-        let joint_indices = self.joint_indices.clone();
-
-        self.enqueue(move |client, _| {
-            let map = handle.lock().map_err(|_| BulletError::CommandFailed {
-                message: "joint state handle poisoned",
-                code: -1,
-            })?;
-
-            for (i, name) in joint_names.iter().enumerate() {
-                if let Some(entry) = map.get(name) {
-                    client.reset_joint_state(
-                        body_id,
-                        joint_indices[i],
-                        entry.position,
-                        entry.velocity,
-                    )?;
-                }
-            }
-
-            Ok(false) // keep running every step
-        })?;
-
-        Ok(())
-    }
-}
-
 impl<const N: usize, R> Arm<N> for RsBulletRobot<R>
 where
-    R: ArmParam<N>,
+    R: Joints<N> + EndPoint,
 {
     fn state(&mut self) -> RobotResult<ArmState<N>> {
         let cache = self
@@ -267,96 +234,118 @@ where
         Ok(())
     }
 
-    fn set_coord(&mut self, _coord: Coord) -> RobotResult<()> {
-        Ok(())
+    fn get_joint(&self) -> [f64; N] {
+        self.state_cache
+            .lock()
+            .ok()
+            .map(|cache| Into::<ArmState<N>>::into(cache.clone()))
+            .and_then(|state| state.joint.meas.q)
+            .unwrap_or([0.; N])
     }
 
-    fn with_coord(&mut self, _coord: Coord) -> &mut Self {
+    fn get_endpoint(&self) -> Pose {
+        self.state_cache
+            .lock()
+            .ok()
+            .map(|cache| Into::<ArmState<N>>::into(cache.clone()))
+            .and_then(|state| state.flange.meas.pose)
+            .unwrap_or_default()
+    }
+
+    fn with_joint_vel(self, _vel_bound: [f64; N]) -> Self {
         self
     }
-
-    fn set_scale(&mut self, _scale: f64) -> RobotResult<()> {
-        Ok(())
-    }
-
-    fn with_scale(&mut self, _scale: f64) -> &mut Self {
+    fn with_joint_acc(self, _acc_bound: [f64; N]) -> Self {
         self
     }
-
-    fn with_velocity(&mut self, _joint_vel: &[f64; N]) -> &mut Self {
+    fn with_joint_jerk(self, _jerk_bound: [f64; N]) -> Self {
         self
     }
-
-    fn with_acceleration(&mut self, _joint_acc: &[f64; N]) -> &mut Self {
+    fn with_torque(self, _torque_bound: [f64; N]) -> Self {
         self
     }
-
-    fn with_jerk(&mut self, _joint_jerk: &[f64; N]) -> &mut Self {
+    fn with_torque_dot(self, _torque_dot_bound: [f64; N]) -> Self {
         self
     }
-
-    fn with_cartesian_velocity(&mut self, _cartesian_vel: f64) -> &mut Self {
+    fn with_cartesian_vel(self, _vel_bound: f64) -> Self {
         self
     }
-
-    fn with_cartesian_acceleration(&mut self, _cartesian_acc: f64) -> &mut Self {
+    fn with_cartesian_acc(self, _acc_bound: f64) -> Self {
         self
     }
-
-    fn with_cartesian_jerk(&mut self, _cartesian_jerk: f64) -> &mut Self {
+    fn with_cartesian_jerk(self, _jerk_bound: f64) -> Self {
         self
     }
-
-    fn with_rotation_velocity(&mut self, _rotation_vel: f64) -> &mut Self {
+    fn with_rotation_vel(self, _vel_bound: f64) -> Self {
         self
     }
-
-    fn with_rotation_acceleration(&mut self, _rotation_acc: f64) -> &mut Self {
+    fn with_rotation_acc(self, _acc_bound: f64) -> Self {
         self
     }
-
-    fn with_rotation_jerk(&mut self, _rotation_jerk: f64) -> &mut Self {
+    fn with_rotation_jerk(self, _jerk_bound: f64) -> Self {
         self
     }
 }
 
-impl<const N: usize, R> ArmParam<N> for RsBulletRobot<R>
+impl<R> Robot for RsBulletRobot<R> {
+    type State = RsBulletRobotState;
+    const CONTROL_PERIOD: f64 = 1.0 / 240.0;
+
+    fn version() -> String {
+        "RsBulletRobot".to_string()
+    }
+
+    fn read_state(&mut self) -> RobotResult<Self::State> {
+        self.state_cache
+            .lock()
+            .map(|cache| cache.clone())
+            .map_err(|_| RobotException::NetworkError("state cache poisoned".to_string()))
+    }
+}
+
+impl<const N: usize, R> Joints<N> for RsBulletRobot<R>
 where
-    R: ArmParam<N>,
+    R: Joints<N>,
 {
-    const CONTROL_PERIOD: f64 = R::CONTROL_PERIOD;
     const JOINT_DEFAULT: [f64; N] = R::JOINT_DEFAULT;
+    const JOINT_PACKED: [f64; N] = R::JOINT_PACKED;
     const JOINT_MIN: [f64; N] = R::JOINT_MIN;
     const JOINT_MAX: [f64; N] = R::JOINT_MAX;
     const JOINT_VEL_BOUND: [f64; N] = R::JOINT_VEL_BOUND;
     const JOINT_ACC_BOUND: [f64; N] = R::JOINT_ACC_BOUND;
     const JOINT_JERK_BOUND: [f64; N] = R::JOINT_JERK_BOUND;
+    const TORQUE_BOUND: [f64; N] = R::TORQUE_BOUND;
+    const TORQUE_DOT_BOUND: [f64; N] = R::TORQUE_DOT_BOUND;
+}
+
+impl<R> EndPoint for RsBulletRobot<R>
+where
+    R: EndPoint,
+{
     const CARTESIAN_VEL_BOUND: f64 = R::CARTESIAN_VEL_BOUND;
     const CARTESIAN_ACC_BOUND: f64 = R::CARTESIAN_ACC_BOUND;
     const CARTESIAN_JERK_BOUND: f64 = R::CARTESIAN_JERK_BOUND;
     const ROTATION_VEL_BOUND: f64 = R::ROTATION_VEL_BOUND;
     const ROTATION_ACC_BOUND: f64 = R::ROTATION_ACC_BOUND;
     const ROTATION_JERK_BOUND: f64 = R::ROTATION_JERK_BOUND;
-    const TORQUE_BOUND: [f64; N] = R::TORQUE_BOUND;
-    const TORQUE_DOT_BOUND: [f64; N] = R::TORQUE_DOT_BOUND;
 }
 
-impl<const N: usize, R> ArmPreplannedMotion<N> for RsBulletRobot<R>
+impl<const N: usize, R> MoveTo<JointSpace<N>> for RsBulletRobot<R>
 where
-    R: ArmParam<N>,
+    R: Joints<N>,
 {
-    fn move_joint(&mut self, target: &[f64; N]) -> RobotResult<()> {
-        self.move_joint_async(target)
-    }
-
-    fn move_joint_async(&mut self, target: &[f64; N]) -> RobotResult<()> {
+    fn move_to(&mut self, target: [f64; N]) -> RobotResult<()> {
         let body_id = self.body_id;
         let joint_indices = self.joint_indices.clone();
 
-        let state = self.state()?;
+        let state: ArmState<N> = self
+            .state_cache
+            .lock()
+            .map(|cache| cache.clone().into())
+            .map_err(|_| RobotException::NetworkError("state cache poisoned".to_string()))?;
         let (path_generate, t_max) = path_generate::joint_s_curve(
-            &state.measured.joint.unwrap_or([0.; N]),
-            target,
+            &state.joint.meas.q.unwrap_or([0.; N]),
+            &target,
             &R::JOINT_VEL_BOUND,
             &R::JOINT_ACC_BOUND,
             &R::JOINT_JERK_BOUND,
@@ -377,111 +366,32 @@ where
         })
         .map_err(Into::into)
     }
+}
 
-    fn move_cartesian(&mut self, target: &Pose) -> RobotResult<()> {
-        self.move_cartesian_async(target)
-    }
-
-    fn move_cartesian_async(&mut self, target: &Pose) -> RobotResult<()> {
-        if self.end_effector_link < 0 {
-            return Err(RobotException::UnprocessableInstructionError(
-                "robot has no movable joints".to_string(),
-            ));
-        }
-
-        let body_id = self.body_id;
-        let joint_indices = self.joint_indices.clone();
-        let end_effector_link = self.end_effector_link;
-
-        let state = self.state()?;
-        let (path_generate, t_max) = path_generate::cartesian_quat_simple_4th_curve(
-            state.measured.pose_o_to_ee.unwrap_or_default().quat(),
-            target.quat(),
-            R::ROTATION_VEL_BOUND,
-            R::ROTATION_ACC_BOUND,
-        );
-
-        let mut duration = Duration::from_secs(0);
-        self.enqueue(move |client, dt| {
-            duration += dt;
-
-            let target_pose = path_generate(duration);
-
-            let current_q: Vec<f64> = client
-                .get_joint_states(body_id, &joint_indices)?
-                .iter()
-                .map(|s| s.position)
-                .collect();
-            let dof = client.compute_dof_count(body_id) as usize;
-            let mut lower_full: Vec<f64> = R::JOINT_MIN.iter().copied().collect();
-            let mut upper_full: Vec<f64> = R::JOINT_MAX.iter().copied().collect();
-            let mut rest_full: Vec<f64> = R::JOINT_DEFAULT.iter().copied().collect();
-            while lower_full.len() < dof {
-                lower_full.push(0.0);
-                upper_full.push(0.04);
-                rest_full.push(0.02);
-            }
-            let joint_ranges: Vec<f64> = lower_full
-                .iter()
-                .zip(upper_full.iter())
-                .map(|(l, u)| u - l)
-                .collect();
-            let mut seed = current_q;
-            while seed.len() < dof {
-                seed.push(0.02);
-            }
-            let ik_options = InverseKinematicsOptions {
-                current_positions: Some(&seed),
-                lower_limits: Some(&lower_full),
-                upper_limits: Some(&upper_full),
-                joint_ranges: Some(&joint_ranges),
-                rest_poses: Some(&rest_full),
-                max_iterations: Some(200),
-                residual_threshold: Some(1e-4),
-                ..Default::default()
-            };
-
-            let solution = client.calculate_inverse_kinematics(
-                body_id,
-                end_effector_link,
-                target_pose,
-                &ik_options,
-            )?;
-
-            if solution.len() < N {
-                return Err(BulletError::CommandFailed {
-                    message: "inverse kinematics returned insufficient joint values",
-                    code: solution.len() as i32,
-                });
-            }
-
-            client.set_joint_motor_control_array(
-                body_id,
-                &joint_indices[0..N],
-                ControlModeArray::Position(&solution[..N]),
-                None,
-            )?;
-
-            Ok(duration >= t_max)
-        })
-        .map_err(Into::into)
+impl<R> MoveTo<FlangeSpace> for RsBulletRobot<R>
+where
+    R: EndPoint,
+{
+    fn move_to(&mut self, target: Pose) -> RobotResult<()> {
+        let _ = target;
+        Err(RobotException::UnprocessableInstructionError(
+            "RsBullet generic wrapper cannot infer joint count for cartesian IK; use JointSpace"
+                .into(),
+        ))
     }
 }
 
-impl<const N: usize, R> ArmPreplannedPath<N> for RsBulletRobot<R>
+impl<const N: usize, R> MoveTraj<JointSpace<N>> for RsBulletRobot<R>
 where
-    R: ArmParam<N>,
+    R: Joints<N>,
 {
-    fn move_traj(&mut self, path: Vec<robot_behavior::MotionType<N>>) -> RobotResult<()> {
-        self.move_traj_async(path)
-    }
-    fn move_traj_async(&mut self, path: Vec<robot_behavior::MotionType<N>>) -> RobotResult<()> {
+    fn move_traj(&mut self, path: Vec<[f64; N]>) -> RobotResult<()> {
         let body_id = self.body_id;
         let joint_indices = self.joint_indices.clone();
         let mut path = path.into_iter();
 
         self.enqueue(move |client, _| match path.next() {
-            Some(MotionType::Joint(joint)) => {
+            Some(joint) => {
                 client.set_joint_motor_control_array(
                     body_id,
                     &joint_indices[0..N],
@@ -490,268 +400,248 @@ where
                 )?;
                 Ok(false)
             }
-
-            Some(MotionType::Cartesian(pose)) => {
-                if joint_indices.len() < 2 {
-                    return Err(BulletError::CommandFailed {
-                        message: "robot has no movable joints",
-                        code: -1,
-                    });
-                }
-
-                let current_q: Vec<f64> = client
-                    .get_joint_states(body_id, &joint_indices)?
-                    .iter()
-                    .map(|s| s.position)
-                    .collect();
-                let dof = client.compute_dof_count(body_id) as usize;
-                let mut lower_full: Vec<f64> = R::JOINT_MIN.iter().copied().collect();
-                let mut upper_full: Vec<f64> = R::JOINT_MAX.iter().copied().collect();
-                let mut rest_full: Vec<f64> = R::JOINT_DEFAULT.iter().copied().collect();
-                while lower_full.len() < dof {
-                    lower_full.push(0.0);
-                    upper_full.push(0.04);
-                    rest_full.push(0.02);
-                }
-                let joint_ranges: Vec<f64> = lower_full
-                    .iter()
-                    .zip(upper_full.iter())
-                    .map(|(l, u)| u - l)
-                    .collect();
-                let mut seed = current_q;
-                while seed.len() < dof {
-                    seed.push(0.02);
-                }
-                let ik_options = InverseKinematicsOptions {
-                    current_positions: Some(&seed),
-                    lower_limits: Some(&lower_full),
-                    upper_limits: Some(&upper_full),
-                    joint_ranges: Some(&joint_ranges),
-                    rest_poses: Some(&rest_full),
-                    max_iterations: Some(200),
-                    residual_threshold: Some(1e-4),
-                    ..Default::default()
-                };
-
-                let solution = client.calculate_inverse_kinematics(
-                    body_id,
-                    joint_indices.len() as i32 - 1,
-                    pose.quat(),
-                    &ik_options,
-                )?;
-
-                if solution.len() < N {
-                    return Err(BulletError::CommandFailed {
-                        message: "inverse kinematics returned insufficient joint values",
-                        code: solution.len() as i32,
-                    });
-                }
-
-                client.set_joint_motor_control_array(
-                    body_id,
-                    &joint_indices[0..N],
-                    ControlModeArray::Position(&solution[..N]),
-                    None,
-                )?;
-
-                Ok(false)
-            }
             None => Ok(true),
-            _ => Err(BulletError::CommandFailed {
-                message: "unsupported motion type in preplanned path",
-                code: -1,
-            }),
         })
         .map_err(Into::into)
     }
+
+    fn move_path<F>(&mut self, _path: F) -> RobotResult<()>
+    where
+        F: Fn(f64) -> Option<[f64; N]>,
+    {
+        Err(RobotException::UnprocessableInstructionError(
+            "RsBullet does not plan continuous joint paths; use move_traj or move_waypoints".into(),
+        ))
+    }
+
+    fn move_waypoints(&mut self, waypoints: Vec<[f64; N]>) -> RobotResult<()> {
+        <Self as MoveTraj<JointSpace<N>>>::move_traj(self, waypoints)
+    }
 }
 
-// impl<R, const N: usize> ArmStreamingMotion<N> for RsBulletRobot<R>
-// where
-//     R: ArmParam<N>,
-// {
-//     type Handle = ;
-//     fn control_with_target(&mut self) -> Arc<Mutex<Option<robot_behavior::ControlType<N>>>> {}
-//     fn move_to_target(&mut self) -> Arc<Mutex<Option<robot_behavior::MotionType<N>>>> {}
-//     fn end_streaming(&mut self) -> RobotResult<()> {}
-//     fn start_streaming(&mut self) -> RobotResult<Self::Handle> {}
-// }
-
-impl<R, const N: usize> ArmRealtimeControl<N> for RsBulletRobot<R>
+impl<R> MoveTraj<FlangeSpace> for RsBulletRobot<R>
 where
-    R: ArmParam<N>,
+    R: EndPoint,
 {
-    fn control_with_closure<FC>(&mut self, mut closure: FC) -> RobotResult<()>
+    fn move_traj(&mut self, path: Vec<Pose>) -> RobotResult<()> {
+        let _ = path;
+        Err(RobotException::UnprocessableInstructionError(
+            "RsBullet generic wrapper cannot infer joint count for cartesian IK; use JointSpace"
+                .into(),
+        ))
+    }
+
+    fn move_path<F>(&mut self, _path: F) -> RobotResult<()>
     where
-        FC: FnMut(ArmState<N>, Duration) -> (robot_behavior::ControlType<N>, bool) + Send + 'static,
+        F: Fn(f64) -> Option<Pose>,
+    {
+        Err(RobotException::UnprocessableInstructionError(
+            "RsBullet does not plan continuous cartesian paths; use move_traj or move_waypoints"
+                .into(),
+        ))
+    }
+
+    fn move_waypoints(&mut self, waypoints: Vec<Pose>) -> RobotResult<()> {
+        <Self as MoveTraj<FlangeSpace>>::move_traj(self, waypoints)
+    }
+}
+
+fn cached_arm_state<const N: usize>(
+    cache: &Arc<Mutex<RsBulletRobotState>>,
+) -> BulletResult<ArmState<N>> {
+    cache
+        .lock()
+        .map(|cache| cache.clone().into())
+        .map_err(|_| BulletError::CommandFailed { message: "state cache poisoned", code: -1 })
+}
+
+fn hold_joint_position<const N: usize>(state: &JointState<N>) -> [f64; N] {
+    state
+        .cmd
+        .q
+        .or(state.des.q)
+        .or(state.meas.q)
+        .unwrap_or([0.0; N])
+}
+
+fn hold_joint_velocity<const N: usize>(_state: &JointState<N>) -> [f64; N] {
+    [0.0; N]
+}
+
+fn hold_joint_torque<const N: usize>(state: &JointState<N>) -> [f64; N] {
+    state
+        .cmd
+        .tau
+        .or(state.des.tau)
+        .or(state.meas.tau)
+        .unwrap_or([0.0; N])
+}
+
+impl<R, const N: usize> ControlWith<TorqueControl<N>> for RsBulletRobot<R>
+where
+    R: Joints<N>,
+{
+    fn hold_command(state: &JointState<N>) -> [f64; N] {
+        hold_joint_torque(state)
+    }
+
+    fn control_with<F>(&mut self, mut closure: F) -> RobotResult<()>
+    where
+        F: FnMut(JointState<N>, Duration) -> ([f64; N], bool) + Send + 'static,
     {
         let body_id = self.body_id;
         let joint_indices = self.joint_indices.clone();
-        let cache_clone = self.state_cache.clone();
+        let cache = self.state_cache.clone();
         let zero_velocity = vec![0.0; N];
         let zero_force = vec![0.0; N];
         let mut torque_mode_initialized = false;
+
         self.enqueue(move |client, dt| {
-            let state = {
-                let cache = cache_clone.lock().map_err(|_| {
-                    RobotException::NetworkError("state cache poisoned".to_string())
-                })?;
-                cache.clone().into()
-            };
-            let (control, done) = closure(state, dt);
-
-            match control {
-                robot_behavior::ControlType::Torque(torque) => {
-                    if !torque_mode_initialized {
-                        client.set_joint_motor_control_array(
-                            body_id,
-                            &joint_indices[0..N],
-                            ControlModeArray::Velocity(&zero_velocity),
-                            Some(&zero_force),
-                        )?;
-                        torque_mode_initialized = true;
-                    }
-                    client.set_joint_motor_control_array(
-                        body_id,
-                        &joint_indices[0..N],
-                        ControlModeArray::Torque(&torque),
-                        None,
-                    )?;
-                }
-                robot_behavior::ControlType::Zero => {
-                    if !torque_mode_initialized {
-                        client.set_joint_motor_control_array(
-                            body_id,
-                            &joint_indices[0..N],
-                            ControlModeArray::Velocity(&zero_velocity),
-                            Some(&zero_force),
-                        )?;
-                        torque_mode_initialized = true;
-                    }
-                    let zero_torque = vec![0.0; N];
-                    client.set_joint_motor_control_array(
-                        body_id,
-                        &joint_indices[0..N],
-                        ControlModeArray::Torque(&zero_torque),
-                        None,
-                    )?;
-                }
+            let state = cached_arm_state(&cache)?;
+            let (torque, done) = closure(state.joint, dt);
+            if !torque_mode_initialized {
+                client.set_joint_motor_control_array(
+                    body_id,
+                    &joint_indices[0..N],
+                    ControlModeArray::Velocity(&zero_velocity),
+                    Some(&zero_force),
+                )?;
+                torque_mode_initialized = true;
             }
-
-            Ok(done)
-        })
-        .map_err(Into::into)
-    }
-    fn move_with_closure<FM>(&mut self, mut closure: FM) -> RobotResult<()>
-    where
-        FM: FnMut(ArmState<N>, Duration) -> (robot_behavior::MotionType<N>, bool) + Send + 'static,
-    {
-        let body_id = self.body_id;
-        let joint_indices = self.joint_indices.clone();
-        let end_effector_link = self.end_effector_link;
-        let cache_clone = self.state_cache.clone();
-        self.enqueue(move |client, dt| {
-            let state = {
-                let cache = cache_clone.lock().map_err(|_| {
-                    RobotException::NetworkError("state cache poisoned".to_string())
-                })?;
-                cache.clone().into()
-            };
-            let (motion, done) = closure(state, dt);
-
-            match motion {
-                robot_behavior::MotionType::Joint(target) => {
-                    client.set_joint_motor_control_array(
-                        body_id,
-                        &joint_indices[0..N],
-                        ControlModeArray::Position(&target),
-                        None,
-                    )?;
-                }
-                robot_behavior::MotionType::JointVel(vel) => {
-                    client.set_joint_motor_control_array(
-                        body_id,
-                        &joint_indices[0..N],
-                        ControlModeArray::Velocity(&vel),
-                        None,
-                    )?;
-                }
-                robot_behavior::MotionType::Cartesian(pose) => {
-                    if end_effector_link < 0 {
-                        return Err(BulletError::CommandFailed {
-                            message: "robot has no end-effector link",
-                            code: -1,
-                        });
-                    }
-
-                    let current_q: Vec<f64> = client
-                        .get_joint_states(body_id, &joint_indices)?
-                        .iter()
-                        .map(|s| s.position)
-                        .collect();
-                    let dof = client.compute_dof_count(body_id) as usize;
-                    let mut lower_full: Vec<f64> = R::JOINT_MIN.iter().copied().collect();
-                    let mut upper_full: Vec<f64> = R::JOINT_MAX.iter().copied().collect();
-                    let mut rest_full: Vec<f64> = R::JOINT_DEFAULT.iter().copied().collect();
-                    while lower_full.len() < dof {
-                        lower_full.push(0.0);
-                        upper_full.push(0.04);
-                        rest_full.push(0.02);
-                    }
-                    let joint_ranges: Vec<f64> = lower_full
-                        .iter()
-                        .zip(upper_full.iter())
-                        .map(|(l, u)| u - l)
-                        .collect();
-                    let mut seed = current_q;
-                    while seed.len() < dof {
-                        seed.push(0.02);
-                    }
-                    let ik_options = InverseKinematicsOptions {
-                        current_positions: Some(&seed),
-                        lower_limits: Some(&lower_full),
-                        upper_limits: Some(&upper_full),
-                        joint_ranges: Some(&joint_ranges),
-                        rest_poses: Some(&rest_full),
-                        max_iterations: Some(200),
-                        residual_threshold: Some(1e-4),
-                        ..Default::default()
-                    };
-
-                    let solution = client.calculate_inverse_kinematics(
-                        body_id,
-                        end_effector_link,
-                        pose.quat(),
-                        &ik_options,
-                    )?;
-
-                    if solution.len() < N {
-                        return Err(BulletError::CommandFailed {
-                            message: "inverse kinematics returned insufficient joint values",
-                            code: solution.len() as i32,
-                        });
-                    }
-
-                    client.set_joint_motor_control_array(
-                        body_id,
-                        &joint_indices[0..N],
-                        ControlModeArray::Position(&solution[..N]),
-                        None,
-                    )?;
-                }
-                _ => {}
-            }
-
+            client.set_joint_motor_control_array(
+                body_id,
+                &joint_indices[0..N],
+                ControlModeArray::Torque(&torque),
+                None,
+            )?;
             Ok(done)
         })
         .map_err(Into::into)
     }
 }
 
-impl<R, const N: usize> ArmImpedance<N> for RsBulletRobot<R>
+impl<R, const N: usize> ControlWith<ArmTorqueControl<N>> for RsBulletRobot<R>
 where
-    R: ArmParam<N>,
+    R: Joints<N>,
 {
+    fn hold_command(state: &ArmState<N>) -> [f64; N] {
+        hold_joint_torque(&state.joint)
+    }
+
+    fn control_with<F>(&mut self, mut closure: F) -> RobotResult<()>
+    where
+        F: FnMut(ArmState<N>, Duration) -> ([f64; N], bool) + Send + 'static,
+    {
+        let body_id = self.body_id;
+        let joint_indices = self.joint_indices.clone();
+        let cache = self.state_cache.clone();
+        let zero_velocity = vec![0.0; N];
+        let zero_force = vec![0.0; N];
+        let mut torque_mode_initialized = false;
+
+        self.enqueue(move |client, dt| {
+            let state = cached_arm_state(&cache)?;
+            let (torque, done) = closure(state, dt);
+            if !torque_mode_initialized {
+                client.set_joint_motor_control_array(
+                    body_id,
+                    &joint_indices[0..N],
+                    ControlModeArray::Velocity(&zero_velocity),
+                    Some(&zero_force),
+                )?;
+                torque_mode_initialized = true;
+            }
+            client.set_joint_motor_control_array(
+                body_id,
+                &joint_indices[0..N],
+                ControlModeArray::Torque(&torque),
+                None,
+            )?;
+            Ok(done)
+        })
+        .map_err(Into::into)
+    }
+}
+
+impl<R, const N: usize> ControlWith<JointPositionControl<N>> for RsBulletRobot<R>
+where
+    R: Joints<N>,
+{
+    fn hold_command(state: &JointState<N>) -> [f64; N] {
+        hold_joint_position(state)
+    }
+
+    fn control_with<F>(&mut self, mut closure: F) -> RobotResult<()>
+    where
+        F: FnMut(JointState<N>, Duration) -> ([f64; N], bool) + Send + 'static,
+    {
+        let body_id = self.body_id;
+        let joint_indices = self.joint_indices.clone();
+        let cache = self.state_cache.clone();
+        self.enqueue(move |client, dt| {
+            let state = cached_arm_state(&cache)?;
+            let (target, done) = closure(state.joint, dt);
+            client.set_joint_motor_control_array(
+                body_id,
+                &joint_indices[0..N],
+                ControlModeArray::Position(&target),
+                None,
+            )?;
+            Ok(done)
+        })
+        .map_err(Into::into)
+    }
+}
+
+impl<R, const N: usize> ControlWith<JointVelocityControl<N>> for RsBulletRobot<R>
+where
+    R: Joints<N>,
+{
+    fn hold_command(state: &JointState<N>) -> [f64; N] {
+        hold_joint_velocity(state)
+    }
+
+    fn control_with<F>(&mut self, mut closure: F) -> RobotResult<()>
+    where
+        F: FnMut(JointState<N>, Duration) -> ([f64; N], bool) + Send + 'static,
+    {
+        let body_id = self.body_id;
+        let joint_indices = self.joint_indices.clone();
+        let cache = self.state_cache.clone();
+        self.enqueue(move |client, dt| {
+            let state = cached_arm_state(&cache)?;
+            let (velocity, done) = closure(state.joint, dt);
+            client.set_joint_motor_control_array(
+                body_id,
+                &joint_indices[0..N],
+                ControlModeArray::Velocity(&velocity),
+                None,
+            )?;
+            Ok(done)
+        })
+        .map_err(Into::into)
+    }
+}
+
+impl<R, const N: usize> ControlWith<CartesianVelocityControl<N>> for RsBulletRobot<R>
+where
+    R: Joints<N> + EndPoint,
+{
+    fn hold_command(_state: &ArmState<N>) -> [f64; 6] {
+        [0.; 6]
+    }
+
+    fn control_with<F>(&mut self, _closure: F) -> RobotResult<()>
+    where
+        F: FnMut(ArmState<N>, Duration) -> ([f64; 6], bool) + Send + 'static,
+    {
+        Err(RobotException::UnprocessableInstructionError(
+            "RsBullet does not implement cartesian velocity realtime control".into(),
+        ))
+    }
+}
+
+/*
     fn joint_impedance_async(
         &mut self,
         stiffness: &[f64; N],
@@ -785,8 +675,8 @@ where
                 cache.clone().into()
             };
 
-            let q = state.measured.joint.unwrap_or([0.; N]);
-            let dq = state.measured.joint_vel.unwrap_or([0.; N]);
+            let q = state.joint.meas.q.unwrap_or([0.; N]);
+            let dq = state.joint.meas.dq.unwrap_or([0.; N]);
             let target = {
                 let t = target_clone.lock().unwrap();
                 t.unwrap_or(q)
@@ -794,14 +684,13 @@ where
             let stiffness = *stiffness_clone.lock().unwrap();
             let damping = *damping_clone.lock().unwrap();
 
-            // PD control: τ = K * (q_d - q) - D * dq
+            // PD control: 锜?= K * (q_d - q) - D * dq
             let mut torque = [0.0; N];
             for i in 0..N {
                 torque[i] = stiffness[i] * (target[i] - q[i]) - damping[i] * dq[i];
             }
 
-            // 扭矩限幅，避免仿真发散。
-            #[allow(clippy::needless_range_loop)]
+            // 閹殿厾鐓╅梽鎰畽閿涘矂浼╅崗宥勮雹閻喎褰傞弫锝冣偓?            #[allow(clippy::needless_range_loop)]
             for i in 0..N {
                 let tau = torque[i];
                 let limit = R::TORQUE_BOUND[i].abs();
@@ -866,9 +755,9 @@ where
                 cache.clone().into()
             };
 
-            let q = state.measured.joint.unwrap_or([0.; N]);
-            let dq = state.measured.joint_vel.unwrap_or([0.; N]);
-            let current_pose = state.measured.pose_o_to_ee.unwrap_or_default();
+            let q = state.joint.meas.q.unwrap_or([0.; N]);
+            let dq = state.joint.meas.dq.unwrap_or([0.; N]);
+            let current_pose = state.flange.meas.pose.unwrap_or_default();
 
             let target_pose = {
                 let t = target_clone.lock().unwrap();
@@ -900,8 +789,8 @@ where
                 q_err.scaled_axis()
             };
 
-            // Cartesian force: F = K_t * Δx - D_t * J * dq (translational)
-            //                   τ_c = K_r * Δθ - D_r * J_r * dq (rotational)
+            // Cartesian force: F = K_t * 铻杧 - D_t * J * dq (translational)
+            //                   锜縚c = K_r * 铻栬儍 - D_r * J_r * dq (rotational)
             let j_lin = &jacobian.linear; // 3xN
             let j_ang = &jacobian.angular; // 3xN
             let dq_vec = nalgebra::DVector::from_column_slice(&dq);
@@ -915,7 +804,7 @@ where
                 torque_cart[i] = rot_stiffness * rot_error[i] - rot_damping * ang_vel[i];
             }
 
-            // Map wrench to joint torques: τ = J_lin^T * F + J_ang^T * τ_cart
+            // Map wrench to joint torques: 锜?= J_lin^T * F + J_ang^T * 锜縚cart
             let tau = j_lin.transpose() * force + j_ang.transpose() * torque_cart;
 
             let mut torque = [0.0; N];
@@ -923,8 +812,7 @@ where
                 torque[i] = tau[i];
             }
 
-            // 扭矩限幅，避免控制力不足或过大震荡。
-            #[allow(clippy::needless_range_loop)]
+            // 閹殿厾鐓╅梽鎰畽閿涘矂浼╅崗宥嗗付閸掕泛濮忔稉宥堝喕閹存牞绻冩径褔娓块懡掳鈧?            #[allow(clippy::needless_range_loop)]
             for i in 0..N {
                 let tau = torque[i];
                 let limit = R::TORQUE_BOUND[i].abs();
@@ -1003,3 +891,4 @@ where
         Ok((handle, closure))
     }
 }
+*/
