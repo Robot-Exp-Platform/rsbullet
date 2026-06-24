@@ -6,9 +6,9 @@ use anyhow::Result;
 use robot_behavior::behavior::{Arm, EndPoint, FlangeSpace, JointSpace, Joints};
 use robot_behavior::utils::path_generate;
 use robot_behavior::{
-    ArmState, ArmTorqueControl, CartesianVelocityControl, ControlWith, JointPositionControl,
-    JointVelocityControl, LoadState, MoveTo, MoveTraj, Pose, Robot, RobotDescription,
-    RobotException, RobotResult, TorqueControl, behavior::*,
+    ArmState, ArmTorqueControl, ControlObservation, ControlObserver, ControlSpace,
+    JointPositionControl, JointState, JointVelocityControl, LoadState, MoveTo, MoveTraj, Pose,
+    Robot, RobotDescription, RobotException, RobotResult, TorqueControl, behavior::*,
 };
 use rsbullet_core::{
     BulletError, BulletResult, ControlModeArray, JointType, LoadModelFlags, PhysicsClient,
@@ -18,6 +18,25 @@ use rsbullet_core::{
 use crate::RsBullet;
 use crate::types::{QueuedControl, RsBulletRobotState};
 
+type RsBulletControlObservers = Arc<Mutex<Vec<ControlObserver<RsBulletRobotState>>>>;
+
+fn control_observers() -> RsBulletControlObservers {
+    Arc::new(Mutex::new(Vec::new()))
+}
+
+fn notify_control_observers(
+    observers: &RsBulletControlObservers,
+    state: &RsBulletRobotState,
+    duration: Duration,
+) {
+    let mut observers = observers
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    for observer in observers.iter_mut() {
+        observer(state, duration);
+    }
+}
+
 pub struct RsBulletRobot<R> {
     pub body_id: i32,
     pub joint_indices: Vec<i32>,
@@ -25,6 +44,8 @@ pub struct RsBulletRobot<R> {
     pub(crate) command_sender: Sender<QueuedControl>,
     pub end_effector_link: i32,
     state_cache: Arc<Mutex<RsBulletRobotState>>,
+    before_observers: RsBulletControlObservers,
+    after_observers: RsBulletControlObservers,
     /// Control period for rate-limiting simulation. If the simulation step completes
     /// faster than this duration, the step callback will sleep for the remaining time.
     /// Typically set to match the desired control frequency (e.g., 1ms for 1kHz).
@@ -41,6 +62,53 @@ impl<R> RsBulletRobot<R> {
             .send(Box::new(control))
             .map_err(|_| anyhow::anyhow!("Failed to send control command: channel closed"))?;
         Ok(())
+    }
+
+    /// Register a queued control task for this simulated robot.
+    ///
+    /// This is rsbullet-specific and intentionally does not implement
+    /// [`robot_behavior::ControlWith`]. The method only submits the control
+    /// closure to the simulation queue; it does not step the physics engine or
+    /// wait for completion. The task is consumed by [`RsBullet::step`].
+    pub fn control_with<S, F>(&self, mut controller: F) -> RobotResult<()>
+    where
+        S: RsBulletControlSpace<R> + Send + 'static,
+        S::Obs: Send + 'static,
+        S::Command: Send + 'static,
+        F: FnMut(S::Obs, Duration) -> (S::Command, bool) + Send + 'static,
+    {
+        let body_id = self.body_id;
+        let joint_indices = self.joint_indices.clone();
+        let end_effector_link = self.end_effector_link;
+        let state_cache = self.state_cache.clone();
+        let before_observers = self.before_observers.clone();
+        let after_observers = self.after_observers.clone();
+        let mut initialized = false;
+
+        self.enqueue(move |client, dt| {
+            if !initialized {
+                S::initialize(client, body_id, &joint_indices)?;
+                initialized = true;
+            }
+
+            let obs = S::observe(
+                client,
+                body_id,
+                &joint_indices,
+                end_effector_link,
+                &state_cache,
+            )?;
+            let full_state = state_cache
+                .lock()
+                .map_err(|_| bullet_error("state cache poisoned"))?
+                .clone();
+            notify_control_observers(&before_observers, &full_state, dt);
+            let (command, done) = controller(obs, dt);
+            notify_control_observers(&after_observers, &full_state, dt);
+            S::apply(client, body_id, &joint_indices, command)?;
+            Ok(done)
+        })
+        .map_err(|error| RobotException::CommandException(error.to_string()))
     }
 }
 
@@ -194,6 +262,8 @@ impl<'a, R> EntityBuilder<'a> for RsBulletRobotBuilder<'a, R> {
             command_sender: sender,
             end_effector_link,
             state_cache,
+            before_observers: control_observers(),
+            after_observers: control_observers(),
             control_period: Duration::from_secs_f64(1.0 / 240.0),
             _marker: PhantomData,
         };
@@ -300,6 +370,30 @@ impl<R> Robot for RsBulletRobot<R> {
             .lock()
             .map(|cache| cache.clone())
             .map_err(|_| RobotException::NetworkError("state cache poisoned".to_string()))
+    }
+}
+
+impl<R> ControlObservation for RsBulletRobot<R> {
+    fn before<H>(&mut self, observer: H) -> &mut Self
+    where
+        H: FnMut(&Self::State, Duration) + Send + 'static,
+    {
+        self.before_observers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(Box::new(observer));
+        self
+    }
+
+    fn after<H>(&mut self, observer: H) -> &mut Self
+    where
+        H: FnMut(&Self::State, Duration) + Send + 'static,
+    {
+        self.after_observers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(Box::new(observer));
+        self
     }
 }
 
@@ -446,198 +540,284 @@ where
     }
 }
 
-fn cached_arm_state<const N: usize>(
+/// A rsbullet-specific mapping from a robot_behavior control space to Bullet
+/// observations and commands.
+///
+/// This trait is intentionally local to rsbullet's queued simulation model. It
+/// lets [`RsBulletRobot::control_with`] keep the same type-level control-space
+/// style without claiming that `RsBulletRobot` is a normal blocking
+/// `robot_behavior::ControlWith` robot.
+pub trait RsBulletControlSpace<R>: ControlSpace<RsBulletRobot<R>> {
+    fn initialize(
+        _client: &mut PhysicsClient,
+        _body_id: i32,
+        _joint_indices: &[i32],
+    ) -> BulletResult<()> {
+        Ok(())
+    }
+
+    fn observe(
+        client: &mut PhysicsClient,
+        body_id: i32,
+        joint_indices: &[i32],
+        end_effector_link: i32,
+        state_cache: &Arc<Mutex<RsBulletRobotState>>,
+    ) -> BulletResult<Self::Obs>;
+
+    fn apply(
+        client: &mut PhysicsClient,
+        body_id: i32,
+        joint_indices: &[i32],
+        command: Self::Command,
+    ) -> BulletResult<()>;
+}
+
+fn bullet_error(message: &'static str) -> BulletError {
+    BulletError::CommandFailed { message, code: -1 }
+}
+
+fn checked_joints<const N: usize>(joint_indices: &[i32]) -> BulletResult<&[i32]> {
+    if joint_indices.len() < N {
+        return Err(bullet_error(
+            "robot has fewer controllable joints than requested",
+        ));
+    }
+    Ok(&joint_indices[..N])
+}
+
+fn read_robot_state(
+    client: &mut PhysicsClient,
+    body_id: i32,
+    joint_indices: &[i32],
+    end_effector_link: i32,
+    state_cache: &Arc<Mutex<RsBulletRobotState>>,
+) -> BulletResult<RsBulletRobotState> {
+    let joint_states = client.get_joint_states(body_id, joint_indices)?;
+    let link_state = if end_effector_link >= 0 {
+        Some(client.get_link_state(body_id, end_effector_link, true, true)?)
+    } else {
+        None
+    };
+    let state = RsBulletRobotState { joint_states, link_state };
+
+    let mut cache = state_cache
+        .lock()
+        .map_err(|_| bullet_error("state cache poisoned"))?;
+    *cache = state.clone();
+
+    Ok(state)
+}
+
+fn read_arm_state<const N: usize>(
+    client: &mut PhysicsClient,
+    body_id: i32,
+    joint_indices: &[i32],
+    end_effector_link: i32,
     cache: &Arc<Mutex<RsBulletRobotState>>,
 ) -> BulletResult<ArmState<N>> {
-    cache
-        .lock()
-        .map(|cache| cache.clone().into())
-        .map_err(|_| BulletError::CommandFailed { message: "state cache poisoned", code: -1 })
+    checked_joints::<N>(joint_indices)?;
+    Ok(read_robot_state(client, body_id, joint_indices, end_effector_link, cache)?.into())
 }
 
-fn hold_joint_position<const N: usize>(state: &JointState<N>) -> [f64; N] {
-    state
-        .cmd
-        .q
-        .or(state.des.q)
-        .or(state.meas.q)
-        .unwrap_or([0.0; N])
+fn clamp_by<const N: usize>(mut values: [f64; N], limit: [f64; N]) -> [f64; N] {
+    for i in 0..N {
+        let bound = limit[i].abs();
+        values[i] = values[i].clamp(-bound, bound);
+    }
+    values
 }
 
-fn hold_joint_velocity<const N: usize>(_state: &JointState<N>) -> [f64; N] {
-    [0.0; N]
+fn clamp_position<const N: usize>(
+    mut values: [f64; N],
+    lower: [f64; N],
+    upper: [f64; N],
+) -> [f64; N] {
+    for i in 0..N {
+        values[i] = values[i].clamp(lower[i], upper[i]);
+    }
+    values
 }
 
-fn hold_joint_torque<const N: usize>(state: &JointState<N>) -> [f64; N] {
-    state
-        .cmd
-        .tau
-        .or(state.des.tau)
-        .or(state.meas.tau)
-        .unwrap_or([0.0; N])
+fn disable_default_motor<const N: usize>(
+    client: &mut PhysicsClient,
+    body_id: i32,
+    joint_indices: &[i32],
+) -> BulletResult<()> {
+    let joints = checked_joints::<N>(joint_indices)?;
+    let zero_velocity = [0.0; N];
+    let zero_force = [0.0; N];
+    client.set_joint_motor_control_array(
+        body_id,
+        joints,
+        ControlModeArray::Velocity(&zero_velocity),
+        Some(&zero_force),
+    )
 }
 
-impl<R, const N: usize> ControlWith<TorqueControl<N>> for RsBulletRobot<R>
+impl<R, const N: usize> RsBulletControlSpace<R> for JointPositionControl<N>
 where
     R: Joints<N>,
 {
-    fn hold_command(state: &JointState<N>) -> [f64; N] {
-        hold_joint_torque(state)
+    fn observe(
+        client: &mut PhysicsClient,
+        body_id: i32,
+        joint_indices: &[i32],
+        end_effector_link: i32,
+        state_cache: &Arc<Mutex<RsBulletRobotState>>,
+    ) -> BulletResult<JointState<N>> {
+        Ok(read_arm_state::<N>(
+            client,
+            body_id,
+            joint_indices,
+            end_effector_link,
+            state_cache,
+        )?
+        .joint)
     }
 
-    fn control_with<F>(&mut self, mut closure: F) -> RobotResult<()>
-    where
-        F: FnMut(JointState<N>, Duration) -> ([f64; N], bool) + Send + 'static,
-    {
-        let body_id = self.body_id;
-        let joint_indices = self.joint_indices.clone();
-        let cache = self.state_cache.clone();
-        let zero_velocity = vec![0.0; N];
-        let zero_force = vec![0.0; N];
-        let mut torque_mode_initialized = false;
-
-        self.enqueue(move |client, dt| {
-            let state = cached_arm_state(&cache)?;
-            let (torque, done) = closure(state.joint, dt);
-            if !torque_mode_initialized {
-                client.set_joint_motor_control_array(
-                    body_id,
-                    &joint_indices[0..N],
-                    ControlModeArray::Velocity(&zero_velocity),
-                    Some(&zero_force),
-                )?;
-                torque_mode_initialized = true;
-            }
-            client.set_joint_motor_control_array(
-                body_id,
-                &joint_indices[0..N],
-                ControlModeArray::Torque(&torque),
-                None,
-            )?;
-            Ok(done)
-        })
-        .map_err(Into::into)
+    fn apply(
+        client: &mut PhysicsClient,
+        body_id: i32,
+        joint_indices: &[i32],
+        command: [f64; N],
+    ) -> BulletResult<()> {
+        let joints = checked_joints::<N>(joint_indices)?;
+        let command = clamp_position(command, R::JOINT_MIN, R::JOINT_MAX);
+        client.set_joint_motor_control_array(
+            body_id,
+            joints,
+            ControlModeArray::Position(&command),
+            None,
+        )
     }
 }
 
-impl<R, const N: usize> ControlWith<ArmTorqueControl<N>> for RsBulletRobot<R>
+impl<R, const N: usize> RsBulletControlSpace<R> for JointVelocityControl<N>
 where
     R: Joints<N>,
 {
-    fn hold_command(state: &ArmState<N>) -> [f64; N] {
-        hold_joint_torque(&state.joint)
+    fn observe(
+        client: &mut PhysicsClient,
+        body_id: i32,
+        joint_indices: &[i32],
+        end_effector_link: i32,
+        state_cache: &Arc<Mutex<RsBulletRobotState>>,
+    ) -> BulletResult<JointState<N>> {
+        Ok(read_arm_state::<N>(
+            client,
+            body_id,
+            joint_indices,
+            end_effector_link,
+            state_cache,
+        )?
+        .joint)
     }
 
-    fn control_with<F>(&mut self, mut closure: F) -> RobotResult<()>
-    where
-        F: FnMut(ArmState<N>, Duration) -> ([f64; N], bool) + Send + 'static,
-    {
-        let body_id = self.body_id;
-        let joint_indices = self.joint_indices.clone();
-        let cache = self.state_cache.clone();
-        let zero_velocity = vec![0.0; N];
-        let zero_force = vec![0.0; N];
-        let mut torque_mode_initialized = false;
-
-        self.enqueue(move |client, dt| {
-            let state = cached_arm_state(&cache)?;
-            let (torque, done) = closure(state, dt);
-            if !torque_mode_initialized {
-                client.set_joint_motor_control_array(
-                    body_id,
-                    &joint_indices[0..N],
-                    ControlModeArray::Velocity(&zero_velocity),
-                    Some(&zero_force),
-                )?;
-                torque_mode_initialized = true;
-            }
-            client.set_joint_motor_control_array(
-                body_id,
-                &joint_indices[0..N],
-                ControlModeArray::Torque(&torque),
-                None,
-            )?;
-            Ok(done)
-        })
-        .map_err(Into::into)
+    fn apply(
+        client: &mut PhysicsClient,
+        body_id: i32,
+        joint_indices: &[i32],
+        command: [f64; N],
+    ) -> BulletResult<()> {
+        let joints = checked_joints::<N>(joint_indices)?;
+        let command = clamp_by(command, R::JOINT_VEL_BOUND);
+        client.set_joint_motor_control_array(
+            body_id,
+            joints,
+            ControlModeArray::Velocity(&command),
+            None,
+        )
     }
 }
 
-impl<R, const N: usize> ControlWith<JointPositionControl<N>> for RsBulletRobot<R>
+impl<R, const N: usize> RsBulletControlSpace<R> for TorqueControl<N>
 where
     R: Joints<N>,
 {
-    fn hold_command(state: &JointState<N>) -> [f64; N] {
-        hold_joint_position(state)
+    fn initialize(
+        client: &mut PhysicsClient,
+        body_id: i32,
+        joint_indices: &[i32],
+    ) -> BulletResult<()> {
+        disable_default_motor::<N>(client, body_id, joint_indices)
     }
 
-    fn control_with<F>(&mut self, mut closure: F) -> RobotResult<()>
-    where
-        F: FnMut(JointState<N>, Duration) -> ([f64; N], bool) + Send + 'static,
-    {
-        let body_id = self.body_id;
-        let joint_indices = self.joint_indices.clone();
-        let cache = self.state_cache.clone();
-        self.enqueue(move |client, dt| {
-            let state = cached_arm_state(&cache)?;
-            let (target, done) = closure(state.joint, dt);
-            client.set_joint_motor_control_array(
-                body_id,
-                &joint_indices[0..N],
-                ControlModeArray::Position(&target),
-                None,
-            )?;
-            Ok(done)
-        })
-        .map_err(Into::into)
+    fn observe(
+        client: &mut PhysicsClient,
+        body_id: i32,
+        joint_indices: &[i32],
+        end_effector_link: i32,
+        state_cache: &Arc<Mutex<RsBulletRobotState>>,
+    ) -> BulletResult<JointState<N>> {
+        Ok(read_arm_state::<N>(
+            client,
+            body_id,
+            joint_indices,
+            end_effector_link,
+            state_cache,
+        )?
+        .joint)
+    }
+
+    fn apply(
+        client: &mut PhysicsClient,
+        body_id: i32,
+        joint_indices: &[i32],
+        command: [f64; N],
+    ) -> BulletResult<()> {
+        let joints = checked_joints::<N>(joint_indices)?;
+        let command = clamp_by(command, R::TORQUE_BOUND);
+        client.set_joint_motor_control_array(
+            body_id,
+            joints,
+            ControlModeArray::Torque(&command),
+            None,
+        )
     }
 }
 
-impl<R, const N: usize> ControlWith<JointVelocityControl<N>> for RsBulletRobot<R>
+impl<R, const N: usize> RsBulletControlSpace<R> for ArmTorqueControl<N>
 where
     R: Joints<N>,
 {
-    fn hold_command(state: &JointState<N>) -> [f64; N] {
-        hold_joint_velocity(state)
+    fn initialize(
+        client: &mut PhysicsClient,
+        body_id: i32,
+        joint_indices: &[i32],
+    ) -> BulletResult<()> {
+        disable_default_motor::<N>(client, body_id, joint_indices)
     }
 
-    fn control_with<F>(&mut self, mut closure: F) -> RobotResult<()>
-    where
-        F: FnMut(JointState<N>, Duration) -> ([f64; N], bool) + Send + 'static,
-    {
-        let body_id = self.body_id;
-        let joint_indices = self.joint_indices.clone();
-        let cache = self.state_cache.clone();
-        self.enqueue(move |client, dt| {
-            let state = cached_arm_state(&cache)?;
-            let (velocity, done) = closure(state.joint, dt);
-            client.set_joint_motor_control_array(
-                body_id,
-                &joint_indices[0..N],
-                ControlModeArray::Velocity(&velocity),
-                None,
-            )?;
-            Ok(done)
-        })
-        .map_err(Into::into)
-    }
-}
-
-impl<R, const N: usize> ControlWith<CartesianVelocityControl<N>> for RsBulletRobot<R>
-where
-    R: Joints<N> + EndPoint,
-{
-    fn hold_command(_state: &ArmState<N>) -> [f64; 6] {
-        [0.; 6]
+    fn observe(
+        client: &mut PhysicsClient,
+        body_id: i32,
+        joint_indices: &[i32],
+        end_effector_link: i32,
+        state_cache: &Arc<Mutex<RsBulletRobotState>>,
+    ) -> BulletResult<ArmState<N>> {
+        read_arm_state::<N>(
+            client,
+            body_id,
+            joint_indices,
+            end_effector_link,
+            state_cache,
+        )
     }
 
-    fn control_with<F>(&mut self, _closure: F) -> RobotResult<()>
-    where
-        F: FnMut(ArmState<N>, Duration) -> ([f64; 6], bool) + Send + 'static,
-    {
-        Err(RobotException::UnprocessableInstructionError(
-            "RsBullet does not implement cartesian velocity realtime control".into(),
-        ))
+    fn apply(
+        client: &mut PhysicsClient,
+        body_id: i32,
+        joint_indices: &[i32],
+        command: [f64; N],
+    ) -> BulletResult<()> {
+        let joints = checked_joints::<N>(joint_indices)?;
+        let command = clamp_by(command, R::TORQUE_BOUND);
+        client.set_joint_motor_control_array(
+            body_id,
+            joints,
+            ControlModeArray::Torque(&command),
+            None,
+        )
     }
 }
 
@@ -684,13 +864,13 @@ where
             let stiffness = *stiffness_clone.lock().unwrap();
             let damping = *damping_clone.lock().unwrap();
 
-            // PD control: 锜?= K * (q_d - q) - D * dq
+            // PD control: 閿?= K * (q_d - q) - D * dq
             let mut torque = [0.0; N];
             for i in 0..N {
                 torque[i] = stiffness[i] * (target[i] - q[i]) - damping[i] * dq[i];
             }
 
-            // 閹殿厾鐓╅梽鎰畽閿涘矂浼╅崗宥勮雹閻喎褰傞弫锝冣偓?            #[allow(clippy::needless_range_loop)]
+            // 闁规鍘鹃悡鈺呮⒔閹邦剛鐣介柨娑樼焸娴尖晠宕楀鍕浌闁活亞鍠庤ぐ鍌炲极閿濆啠鍋?            #[allow(clippy::needless_range_loop)]
             for i in 0..N {
                 let tau = torque[i];
                 let limit = R::TORQUE_BOUND[i].abs();
@@ -789,8 +969,8 @@ where
                 q_err.scaled_axis()
             };
 
-            // Cartesian force: F = K_t * 铻杧 - D_t * J * dq (translational)
-            //                   锜縚c = K_r * 铻栬儍 - D_r * J_r * dq (rotational)
+            // Cartesian force: F = K_t * 閾绘潷 - D_t * J * dq (translational)
+            //                   閿滅笟c = K_r * 閾绘牞鍎?- D_r * J_r * dq (rotational)
             let j_lin = &jacobian.linear; // 3xN
             let j_ang = &jacobian.angular; // 3xN
             let dq_vec = nalgebra::DVector::from_column_slice(&dq);
@@ -804,7 +984,7 @@ where
                 torque_cart[i] = rot_stiffness * rot_error[i] - rot_damping * ang_vel[i];
             }
 
-            // Map wrench to joint torques: 锜?= J_lin^T * F + J_ang^T * 锜縚cart
+            // Map wrench to joint torques: 閿?= J_lin^T * F + J_ang^T * 閿滅笟cart
             let tau = j_lin.transpose() * force + j_ang.transpose() * torque_cart;
 
             let mut torque = [0.0; N];
@@ -812,7 +992,7 @@ where
                 torque[i] = tau[i];
             }
 
-            // 閹殿厾鐓╅梽鎰畽閿涘矂浼╅崗宥嗗付閸掕泛濮忔稉宥堝喕閹存牞绻冩径褔娓块懡掳鈧?            #[allow(clippy::needless_range_loop)]
+            // 闁规鍘鹃悡鈺呮⒔閹邦剛鐣介柨娑樼焸娴尖晠宕楀鍡椾粯闁告帟娉涙慨蹇旂▔瀹ュ牆鍠曢柟瀛樼墳缁诲啯寰勮濞撳潡鎳℃幊閳?            #[allow(clippy::needless_range_loop)]
             for i in 0..N {
                 let tau = torque[i];
                 let limit = R::TORQUE_BOUND[i].abs();
@@ -849,7 +1029,7 @@ where
         damping: &[f64; N],
     ) -> RobotResult<(
         JointImpedanceHandle<N>,
-        impl FnMut() -> BoxFuture<'static, RobotResult<()>> + Send + 'static,
+        impl FnMut() -> BoxFuture<'static, RobotResult<()>>,
     )> {
         let handle = self.joint_impedance_async(stiffness, damping)?;
         let is_finished = handle.is_finished.clone();
@@ -873,7 +1053,7 @@ where
         damping: (f64, f64),
     ) -> RobotResult<(
         CartesianImpedanceHandle,
-        impl FnMut() -> BoxFuture<'static, RobotResult<()>> + Send + 'static,
+        impl FnMut() -> BoxFuture<'static, RobotResult<()>>,
     )> {
         let handle = self.cartesian_impedance_async(stiffness, damping)?;
         let is_finished = handle.is_finished.clone();

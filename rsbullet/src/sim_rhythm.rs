@@ -35,10 +35,16 @@ impl SimRhythm {
 impl Rhythm for SimRhythm {
     type Yield = ();
     type Feed = ();
+    type Input = ();
     type Output = ();
     type Error = RoplatError;
 
-    async fn drive<N, F, Fut>(&mut self, mut nodes: N, mut op_domain: F) -> ((), N)
+    async fn drive<N, F, Fut>(
+        &mut self,
+        mut nodes: N,
+        mut op_domain: F,
+        _input: Self::Input,
+    ) -> ((), N)
     where
         N: Send,
         F: FnMut(N, Self::Yield) -> Fut + Send,
