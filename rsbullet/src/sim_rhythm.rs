@@ -33,6 +33,7 @@ impl SimRhythm {
 }
 
 impl Rhythm for SimRhythm {
+    type Input = ();
     type Yield = ();
     type Feed = ();
     type Output = ();
@@ -42,6 +43,7 @@ impl Rhythm for SimRhythm {
         &mut self,
         mut nodes: N,
         mut op_domain: F,
+        _input: Self::Input,
     ) -> ((), N)
     where
         N: Send,
