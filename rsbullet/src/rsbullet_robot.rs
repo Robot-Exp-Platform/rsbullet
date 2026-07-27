@@ -864,13 +864,14 @@ where
             let stiffness = *stiffness_clone.lock().unwrap();
             let damping = *damping_clone.lock().unwrap();
 
-            // PD control: 閿?= K * (q_d - q) - D * dq
+            // PD control: tau = K * (q_d - q) - D * dq
             let mut torque = [0.0; N];
             for i in 0..N {
                 torque[i] = stiffness[i] * (target[i] - q[i]) - damping[i] * dq[i];
             }
 
-            // 闁规鍘鹃悡鈺呮⒔閹邦剛鐣介柨娑樼焸娴尖晠宕楀鍕浌闁活亞鍠庤ぐ鍌炲极閿濆啠鍋?            #[allow(clippy::needless_range_loop)]
+            // Clamp joint torques to the limits specified by the model.
+            #[allow(clippy::needless_range_loop)]
             for i in 0..N {
                 let tau = torque[i];
                 let limit = R::TORQUE_BOUND[i].abs();
@@ -969,8 +970,8 @@ where
                 q_err.scaled_axis()
             };
 
-            // Cartesian force: F = K_t * 閾绘潷 - D_t * J * dq (translational)
-            //                   閿滅笟c = K_r * 閾绘牞鍎?- D_r * J_r * dq (rotational)
+            // Cartesian force: F = K_t * position_error - D_t * J * dq (translational)
+            // Cartesian torque: tau_c = K_r * rotation_error - D_r * J_r * dq (rotational)
             let j_lin = &jacobian.linear; // 3xN
             let j_ang = &jacobian.angular; // 3xN
             let dq_vec = nalgebra::DVector::from_column_slice(&dq);
@@ -984,7 +985,7 @@ where
                 torque_cart[i] = rot_stiffness * rot_error[i] - rot_damping * ang_vel[i];
             }
 
-            // Map wrench to joint torques: 閿?= J_lin^T * F + J_ang^T * 閿滅笟cart
+            // Map the wrench to joint torques: tau = J_lin^T * F + J_ang^T * tau_c
             let tau = j_lin.transpose() * force + j_ang.transpose() * torque_cart;
 
             let mut torque = [0.0; N];
@@ -992,7 +993,8 @@ where
                 torque[i] = tau[i];
             }
 
-            // 闁规鍘鹃悡鈺呮⒔閹邦剛鐣介柨娑樼焸娴尖晠宕楀鍡椾粯闁告帟娉涙慨蹇旂▔瀹ュ牆鍠曢柟瀛樼墳缁诲啯寰勮濞撳潡鎳℃幊閳?            #[allow(clippy::needless_range_loop)]
+            // Clamp joint torques to the limits specified by the model.
+            #[allow(clippy::needless_range_loop)]
             for i in 0..N {
                 let tau = torque[i];
                 let limit = R::TORQUE_BOUND[i].abs();

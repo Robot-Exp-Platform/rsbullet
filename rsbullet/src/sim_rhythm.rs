@@ -7,10 +7,10 @@ use roplat::rhythm::Rhythm;
 
 use crate::RsBullet;
 
-/// 仿真步进节律�?
+/// Rhythm for stepping a simulation.
 ///
-/// 按固定周期驱�?`RsBullet` 物理引擎步进，每�?tick 调用 `engine.step()`
-/// �?yield `()` 给下游节点（可用于挂载观�?记录等节点）�?
+/// Drives the `RsBullet` physics engine at a fixed period and calls
+/// `engine.step()` on every tick. It yields `()` to downstream nodes.
 ///
 /// ```ignore
 /// let mut sim_rhythm = SimRhythm::new(engine, Duration::from_secs_f64(1.0 / 240.0));
