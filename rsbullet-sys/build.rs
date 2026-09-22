@@ -11,6 +11,7 @@ fn lib_exists(dir: &Path, name: &str) -> bool {
 }
 
 fn main() {
+    println!("cargo:rerun-if-env-changed=BULLET_SKIP_ASSET_EXPORT");
     let mut cfg = cmake::Config::new("bullet3");
     cfg.profile("Release")
         .define("BUILD_SHARED_LIBS", "OFF")
@@ -85,8 +86,10 @@ fn main() {
         println!("cargo:rustc-link-lib=dylib=Comdlg32");
     }
 
-    if let Err(err) = export_bullet_data() {
-        println!("cargo:warning=failed to prepare bullet data directory: {err}");
+    if env::var_os("BULLET_SKIP_ASSET_EXPORT").as_deref() != Some(std::ffi::OsStr::new("1")) {
+        if let Err(err) = export_bullet_data() {
+            println!("cargo:warning=failed to prepare bullet data directory: {err}");
+        }
     }
 }
 
@@ -117,9 +120,15 @@ fn export_bullet_data() -> Result<(), String> {
         bullet_data_target_dir().ok_or_else(|| "could not determine user directory".to_string())?;
     let target = target_root.join("bullet");
 
-    if target.exists() {
-        fs::remove_dir_all(&target)
-            .map_err(|e| format!("failed to clear existing target {}: {e}", target.display()))?;
+    // Builds must never delete or overwrite an existing user asset directory.
+    // Users can point examples at a separate freshly exported data directory
+    // when an asset refresh is needed.
+    if target.symlink_metadata().is_ok() {
+        println!(
+            "cargo:warning=preserving existing Bullet asset path {}; set BULLET_SKIP_ASSET_EXPORT=1 to disable asset export",
+            target.display()
+        );
+        return Ok(());
     }
     copy_dir_recursive(&source_1, &target)?;
     copy_dir_recursive(&source_2, &target)?;

@@ -180,7 +180,9 @@ mod tests {
         let _ = (&mut _robot1, &mut _robot2, &_robot3, engine);
     }
 
+    // Interactive demonstration: opens a GUI and steps forever; exclude from CI.
     #[test]
+    #[ignore = "interactive GUI demonstration with an unbounded simulation loop"]
     fn add_collision_and_visual() -> anyhow::Result<()> {
         let mut engine = RsBullet::new(Mode::Gui)?;
 

@@ -72,3 +72,10 @@ fn main() -> Result<()> {
 In `Pybullet`, to control a robot, you need to get the robot's unique ID first, and then call various functions with the ID as a parameter. In `Rsbullet`, you can directly create a robot object through the `robot_builder` method of `Rsbullet`, and then call the robot's methods in `robot_behavior` to control it. The robot object will automatically manage its own ID internally, making it more convenient to use.
 
 Enjoy it!
+
+### Build-time example assets
+
+Set `BULLET_SKIP_ASSET_EXPORT=1` for checks, CI, or builds that do not need
+example assets copied into the user data directory. Otherwise the build script
+creates the `bullet` asset directory only when it is absent. Existing directories,
+files, and symlinks at that path are preserved; builds never clear them.
