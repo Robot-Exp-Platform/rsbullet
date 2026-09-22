@@ -79,3 +79,21 @@ Set `BULLET_SKIP_ASSET_EXPORT=1` for checks, CI, or builds that do not need
 example assets copied into the user data directory. Otherwise the build script
 creates the `bullet` asset directory only when it is absent. Existing directories,
 files, and symlinks at that path are preserved; builds never clear them.
+
+### Optional roplat rhythm
+
+The default `rsbullet` build exposes the simulator and robot APIs without
+compiling roplat. Enable `features = ["roplat"]` to use `SimRhythm`. Tokio
+remains a normal dependency because robot motion futures also use its timers.
+The feature changes integration availability, not simulator stepping semantics.
+
+```sh
+cargo check -p rsbullet --no-default-features --features roplat --lib
+```
+
+This feature is part of the current internal Git baseline; the previously
+published 0.3.11 package must not be assumed to contain it. For an application,
+select the reviewed Git revision of this repository and enable `roplat`.
+
+The manifest retains complete dependency declarations so the RsBullet repository
+can be built independently of the parent drives workspace.

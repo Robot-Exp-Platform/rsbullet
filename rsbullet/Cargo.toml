@@ -26,14 +26,15 @@ exclude = [
 rsbullet-core = { version = "0.3.3", path = "../rsbullet-core" }
 rsbullet_sys = { version = "0.3.1", path = "../rsbullet-sys" }
 nalgebra = { version = "0.34.1" }
-robot_behavior = "0.6.0"
-roplat = { version = "0.2.0" }
+robot_behavior = { version = "0.6.0", git = "ssh://git@github.com/Robot-Exp-Platform/robot_behavior.git", rev = "79a3820af143a3ab75dfd3b308469482aac534c0" }
+roplat = { version = "0.2.2", git = "ssh://git@github.com/Robot-Exp-Platform/roplat.git", rev = "b47f7b6aa54a230417331e4b85cefcc8eff9e128", optional = true }
 anyhow = "1.0.100"
 futures = "0.3"
 tokio = { version = "1", features = ["time"] }
 
 [features]
 default = []
+roplat = ["dep:roplat"]
 dart = ["rsbullet-core/dart"]
 physx = ["rsbullet-core/physx"]
 mujoco = ["rsbullet-core/mujoco"]
