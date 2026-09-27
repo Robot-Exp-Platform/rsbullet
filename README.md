@@ -91,8 +91,9 @@ The feature changes integration availability, not simulator stepping semantics.
 cargo check -p rsbullet --no-default-features --features roplat --lib
 ```
 
-This feature is part of the current internal Git baseline; the previously
-published 0.3.11 package must not be assumed to contain it. For an application,
+The current Git source prepares `rsbullet` / `rsbullet-core` 0.4.0 and
+`rsbullet_sys` 0.3.2; these versions have not been uploaded to crates.io. The
+previously published 0.3.11 package must not be assumed to contain this feature. For an application,
 select the reviewed Git revision of this repository and enable `roplat`.
 
 The manifest retains complete dependency declarations so the RsBullet repository

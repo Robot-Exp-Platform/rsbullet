@@ -78,6 +78,13 @@ fn main() {
     #[cfg(target_os = "macos")]
     println!("cargo:rustc-link-lib=c++");
 
+    // CMake's static-library dependencies do not propagate to Rust consumers.
+    // Bullet's macOS window backend requires both system frameworks.
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        println!("cargo:rustc-link-lib=framework=Cocoa");
+        println!("cargo:rustc-link-lib=framework=OpenGL");
+    }
+
     #[cfg(target_os = "windows")]
     {
         println!("cargo:rustc-link-lib=dylib=User32");
