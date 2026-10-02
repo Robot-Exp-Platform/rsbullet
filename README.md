@@ -72,3 +72,29 @@ fn main() -> Result<()> {
 In `Pybullet`, to control a robot, you need to get the robot's unique ID first, and then call various functions with the ID as a parameter. In `Rsbullet`, you can directly create a robot object through the `robot_builder` method of `Rsbullet`, and then call the robot's methods in `robot_behavior` to control it. The robot object will automatically manage its own ID internally, making it more convenient to use.
 
 Enjoy it!
+
+### Build-time example assets
+
+Set `BULLET_SKIP_ASSET_EXPORT=1` for checks, CI, or builds that do not need
+example assets copied into the user data directory. Otherwise the build script
+creates the `bullet` asset directory only when it is absent. Existing directories,
+files, and symlinks at that path are preserved; builds never clear them.
+
+### Optional roplat rhythm
+
+The default `rsbullet` build exposes the simulator and robot APIs without
+compiling roplat. Enable `features = ["roplat"]` to use `SimRhythm`. Tokio
+remains a normal dependency because robot motion futures also use its timers.
+The feature changes integration availability, not simulator stepping semantics.
+
+```sh
+cargo check -p rsbullet --no-default-features --features roplat --lib
+```
+
+The current Git source prepares `rsbullet` / `rsbullet-core` 0.4.0 and
+`rsbullet_sys` 0.3.2; these versions have not been uploaded to crates.io. The
+previously published 0.3.11 package must not be assumed to contain this feature. For an application,
+select the reviewed Git revision of this repository and enable `roplat`.
+
+The manifest retains complete dependency declarations so the RsBullet repository
+can be built independently of the parent drives workspace.
