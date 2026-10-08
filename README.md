@@ -137,7 +137,7 @@ Repository manifests retain pinned Git dependencies; building that source requir
 
 ## Next steps
 
-- [Public Rust API](https://docs.rs/rsbullet/0.4.0/rsbullet/) and [core API](https://docs.rs/rsbullet-core/0.4.0/rsbullet_core/).
+- [Public Rust API source](rsbullet/src/lib.rs) and [core API source](rsbullet-core/src/lib.rs). These entry points are available while the 0.4.0 docs.rs builds are unavailable.
 - [API inventory](RSBULLET_API_REFERENCE.md) for the command surface; check current signatures when adapting older PyBullet/RuBullet examples.
 - [Examples](rsbullet/examples) for constraints, dynamics, and rendering. Many open a GUI or need external assets.
 - [Robot builders and queued control](rsbullet/src/rsbullet_robot.rs), [simulation stepping](rsbullet/src/rsbullet.rs), and [SimRhythm](rsbullet/src/sim_rhythm.rs).
