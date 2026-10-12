@@ -1,6 +1,6 @@
 [package]
 name = "rsbullet"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 authors = [
     "Nathan Kent <nkent2@cs.rochester.edu>",
@@ -23,11 +23,11 @@ exclude = [
 ]
 
 [dependencies]
-rsbullet-core = { version = "0.4.0", path = "../rsbullet-core" }
+rsbullet-core = { version = "0.5.0", path = "../rsbullet-core" }
 rsbullet_sys = { version = "0.3.2", path = "../rsbullet-sys" }
 nalgebra = { version = "0.34.1" }
-robot_behavior = { version = "0.6.0", git = "ssh://git@github.com/Robot-Exp-Platform/robot_behavior.git", rev = "781245ca4d662a693cfb24955328a5a610859591" }
-roplat = { version = "0.3.0", git = "ssh://git@github.com/Robot-Exp-Platform/roplat.git", rev = "9bbdc7d235f5a1b07fc8b9eb0eba016fe2d001be", optional = true }
+robot_behavior = { version = "0.7.0", git = "ssh://git@github.com/Robot-Exp-Platform/robot_behavior.git", rev = "e6455314b67e2a749e0a0606e1f7ade8f03d7871" }
+roplat = { version = "0.4.0", git = "ssh://git@github.com/Robot-Exp-Platform/roplat.git", rev = "1a4214906fbbc2159ec1147a2dcd069dd811630a", optional = true }
 anyhow = "1.0.100"
 futures = "0.3"
 tokio = { version = "1", features = ["time"] }

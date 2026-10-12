@@ -347,7 +347,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.59.0",
+ "windows-sys",
 ]
 
 [[package]]
@@ -1122,8 +1122,8 @@ dependencies = [
 
 [[package]]
 name = "robot_behavior"
-version = "0.6.0"
-source = "git+ssh://git@github.com/Robot-Exp-Platform/robot_behavior.git?rev=781245ca4d662a693cfb24955328a5a610859591#781245ca4d662a693cfb24955328a5a610859591"
+version = "0.7.0"
+source = "git+ssh://git@github.com/Robot-Exp-Platform/robot_behavior.git?rev=e6455314b67e2a749e0a0606e1f7ade8f03d7871#e6455314b67e2a749e0a0606e1f7ade8f03d7871"
 dependencies = [
  "anyhow",
  "copp",
@@ -1140,8 +1140,8 @@ dependencies = [
 
 [[package]]
 name = "roplat"
-version = "0.3.0"
-source = "git+ssh://git@github.com/Robot-Exp-Platform/roplat.git?rev=9bbdc7d235f5a1b07fc8b9eb0eba016fe2d001be#9bbdc7d235f5a1b07fc8b9eb0eba016fe2d001be"
+version = "0.4.0"
+source = "git+ssh://git@github.com/Robot-Exp-Platform/roplat.git?rev=1a4214906fbbc2159ec1147a2dcd069dd811630a#1a4214906fbbc2159ec1147a2dcd069dd811630a"
 dependencies = [
  "async-trait",
  "bincode",
@@ -1158,8 +1158,8 @@ dependencies = [
 
 [[package]]
 name = "roplat_launch"
-version = "0.3.0"
-source = "git+ssh://git@github.com/Robot-Exp-Platform/roplat.git?rev=9bbdc7d235f5a1b07fc8b9eb0eba016fe2d001be#9bbdc7d235f5a1b07fc8b9eb0eba016fe2d001be"
+version = "0.4.0"
+source = "git+ssh://git@github.com/Robot-Exp-Platform/roplat.git?rev=1a4214906fbbc2159ec1147a2dcd069dd811630a#1a4214906fbbc2159ec1147a2dcd069dd811630a"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1172,8 +1172,8 @@ dependencies = [
 
 [[package]]
 name = "roplat_macros"
-version = "0.3.0"
-source = "git+ssh://git@github.com/Robot-Exp-Platform/roplat.git?rev=9bbdc7d235f5a1b07fc8b9eb0eba016fe2d001be#9bbdc7d235f5a1b07fc8b9eb0eba016fe2d001be"
+version = "0.4.0"
+source = "git+ssh://git@github.com/Robot-Exp-Platform/roplat.git?rev=1a4214906fbbc2159ec1147a2dcd069dd811630a#1a4214906fbbc2159ec1147a2dcd069dd811630a"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1185,8 +1185,8 @@ dependencies = [
 
 [[package]]
 name = "roplat_system"
-version = "0.3.0"
-source = "git+ssh://git@github.com/Robot-Exp-Platform/roplat.git?rev=9bbdc7d235f5a1b07fc8b9eb0eba016fe2d001be#9bbdc7d235f5a1b07fc8b9eb0eba016fe2d001be"
+version = "0.4.0"
+source = "git+ssh://git@github.com/Robot-Exp-Platform/roplat.git?rev=1a4214906fbbc2159ec1147a2dcd069dd811630a#1a4214906fbbc2159ec1147a2dcd069dd811630a"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1197,7 +1197,7 @@ dependencies = [
 
 [[package]]
 name = "rsbullet"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "futures",
@@ -1211,7 +1211,7 @@ dependencies = [
 
 [[package]]
 name = "rsbullet-core"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "bitflags 2.10.0",
  "nalgebra",
@@ -1612,7 +1612,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys",
 ]
 
 [[package]]
@@ -1678,15 +1678,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7837d08f69c77cf6b07689544538e017c1bfcf57e34b4c0ff58e6c2cd3b37091"
 dependencies = [
  "windows-link",
-]
-
-[[package]]
-name = "windows-sys"
-version = "0.52.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "282be5f36a8ce781fad8c8ae18fa3f9beff57ec1b52cb3de0789201425d9a33d"
-dependencies = [
- "windows-targets",
 ]
 
 [[package]]
