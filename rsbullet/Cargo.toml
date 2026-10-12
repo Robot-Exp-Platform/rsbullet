@@ -26,8 +26,8 @@ exclude = [
 rsbullet-core = { version = "0.5.0", path = "../rsbullet-core" }
 rsbullet_sys = { version = "0.3.2", path = "../rsbullet-sys" }
 nalgebra = { version = "0.34.1" }
-robot_behavior = { version = "0.7.0", git = "ssh://git@github.com/Robot-Exp-Platform/robot_behavior.git", rev = "13fa7c4ba79573bfd8822eb13b40802253baed15" }
-roplat = { version = "0.4.0", git = "ssh://git@github.com/Robot-Exp-Platform/roplat.git", rev = "5d4393abdcad47a0b1849e9ad1e6c3fd0d561c66", optional = true }
+robot_behavior = { version = "0.7.0", git = "ssh://git@github.com/Robot-Exp-Platform/robot_behavior.git", rev = "e6455314b67e2a749e0a0606e1f7ade8f03d7871" }
+roplat = { version = "0.4.0", git = "ssh://git@github.com/Robot-Exp-Platform/roplat.git", rev = "1a4214906fbbc2159ec1147a2dcd069dd811630a", optional = true }
 anyhow = "1.0.100"
 futures = "0.3"
 tokio = { version = "1", features = ["time"] }
