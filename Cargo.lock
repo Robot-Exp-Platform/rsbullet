@@ -1122,8 +1122,8 @@ dependencies = [
 
 [[package]]
 name = "robot_behavior"
-version = "0.7.0"
-source = "git+ssh://git@github.com/Robot-Exp-Platform/robot_behavior.git?rev=e6455314b67e2a749e0a0606e1f7ade8f03d7871#e6455314b67e2a749e0a0606e1f7ade8f03d7871"
+version = "0.8.0"
+source = "git+ssh://git@github.com/Robot-Exp-Platform/robot_behavior.git?rev=1f6bf80e6fa18cfb331ea5c18db790cc85ef8e8d#1f6bf80e6fa18cfb331ea5c18db790cc85ef8e8d"
 dependencies = [
  "anyhow",
  "copp",
@@ -1140,8 +1140,8 @@ dependencies = [
 
 [[package]]
 name = "roplat"
-version = "0.4.0"
-source = "git+ssh://git@github.com/Robot-Exp-Platform/roplat.git?rev=1a4214906fbbc2159ec1147a2dcd069dd811630a#1a4214906fbbc2159ec1147a2dcd069dd811630a"
+version = "0.5.0"
+source = "git+ssh://git@github.com/Robot-Exp-Platform/roplat.git?rev=d6484b1c595b7d69e8727dc04d471f4bbf57def4#d6484b1c595b7d69e8727dc04d471f4bbf57def4"
 dependencies = [
  "async-trait",
  "bincode",
@@ -1158,8 +1158,8 @@ dependencies = [
 
 [[package]]
 name = "roplat_launch"
-version = "0.4.0"
-source = "git+ssh://git@github.com/Robot-Exp-Platform/roplat.git?rev=1a4214906fbbc2159ec1147a2dcd069dd811630a#1a4214906fbbc2159ec1147a2dcd069dd811630a"
+version = "0.5.0"
+source = "git+ssh://git@github.com/Robot-Exp-Platform/roplat.git?rev=d6484b1c595b7d69e8727dc04d471f4bbf57def4#d6484b1c595b7d69e8727dc04d471f4bbf57def4"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1172,8 +1172,8 @@ dependencies = [
 
 [[package]]
 name = "roplat_macros"
-version = "0.4.0"
-source = "git+ssh://git@github.com/Robot-Exp-Platform/roplat.git?rev=1a4214906fbbc2159ec1147a2dcd069dd811630a#1a4214906fbbc2159ec1147a2dcd069dd811630a"
+version = "0.5.0"
+source = "git+ssh://git@github.com/Robot-Exp-Platform/roplat.git?rev=d6484b1c595b7d69e8727dc04d471f4bbf57def4#d6484b1c595b7d69e8727dc04d471f4bbf57def4"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1185,8 +1185,8 @@ dependencies = [
 
 [[package]]
 name = "roplat_system"
-version = "0.4.0"
-source = "git+ssh://git@github.com/Robot-Exp-Platform/roplat.git?rev=1a4214906fbbc2159ec1147a2dcd069dd811630a#1a4214906fbbc2159ec1147a2dcd069dd811630a"
+version = "0.5.0"
+source = "git+ssh://git@github.com/Robot-Exp-Platform/roplat.git?rev=d6484b1c595b7d69e8727dc04d471f4bbf57def4#d6484b1c595b7d69e8727dc04d471f4bbf57def4"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1197,7 +1197,7 @@ dependencies = [
 
 [[package]]
 name = "rsbullet"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "futures",
@@ -1211,7 +1211,7 @@ dependencies = [
 
 [[package]]
 name = "rsbullet-core"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "bitflags 2.10.0",
  "nalgebra",

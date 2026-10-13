@@ -11,6 +11,7 @@ use crate::RsBullet;
 ///
 /// Drives the `RsBullet` physics engine at a fixed period and calls
 /// `engine.step()` on every tick. It yields `()` to downstream nodes.
+/// The engine stays owned by the rhythm; its external `Resources` channel is `()`.
 ///
 /// ```ignore
 /// let mut sim_rhythm = SimRhythm::new(engine, Duration::from_secs_f64(1.0 / 240.0));
@@ -41,12 +42,14 @@ impl Rhythm for SimRhythm {
     type Feed = ();
     type Input = ();
     type Output = ();
+    type Resources = ();
 
     async fn drive<N, F, Fut>(
         &mut self,
         mut nodes: N,
         mut op_domain: F,
         _input: Self::Input,
+        _resources: (),
         context: ExecutionContext,
     ) -> (Execution<()>, N)
     where
