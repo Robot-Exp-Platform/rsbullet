@@ -123,7 +123,7 @@ Point `set_additional_search_path` at that checkout's `examples/pybullet/gym/pyb
 
 ## Optional integration and source builds
 
-The default feature set is empty. Enable `rsbullet = { version = "0.4.0", features = ["roplat"] }` to expose `SimRhythm`; ordinary simulator use does not need roplat. Tokio remains a normal dependency because motion futures use its timers. The backend/transport flags such as `dart`, `physx`, `mujoco`, and `grpc` do not by themselves install or validate those external backends.
+The default feature set is empty. Enable `rsbullet = { version = "0.4.0", features = ["roplat"] }` to expose `SimRhythm`; ordinary simulator use does not need roplat. On the current Git preparation branch (rsbullet / rsbullet-core 0.6.0, roplat 0.5.0; not yet published), `SimRhythm` keeps ownership of its engine and declares `Resources = ()`; the new external borrow channel does not change its step policy. This new trait contract is not part of the registry 0.4.0 example above. Tokio remains a normal dependency because motion futures use its timers. The backend/transport flags such as `dart`, `physx`, `mujoco`, and `grpc` do not by themselves install or validate those external backends.
 
 For a source checkout, initialize the native source before building:
 
