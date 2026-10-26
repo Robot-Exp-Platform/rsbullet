@@ -90,11 +90,11 @@ Linux headless prerequisites:
 ```sh
 sudo apt-get update
 sudo apt-get install build-essential cmake ninja-build pkg-config libfontconfig1-dev
-rustup toolchain install nightly-2026-07-07 --profile minimal
+rustup toolchain install nightly-2026-10-20 --profile minimal
 BULLET_SKIP_ASSET_EXPORT=1 ROPLAT_SKIP_ASSET_EXPORT=1 \
-  cargo +nightly-2026-07-07 test -p rsbullet-core --no-default-features --lib --tests
+  cargo +nightly-2026-10-20 test -p rsbullet-core --no-default-features --lib --tests
 BULLET_SKIP_ASSET_EXPORT=1 ROPLAT_SKIP_ASSET_EXPORT=1 \
-  cargo +nightly-2026-07-07 test -p rsbullet --no-default-features --features roplat --lib --tests
+  cargo +nightly-2026-10-20 test -p rsbullet --no-default-features --features roplat --lib --tests
 ```
 
 The optional [Dockerfile](../docker/Dockerfile.headless) prepares the same
@@ -112,7 +112,7 @@ root. It writes actual end-effector feedback and motor effort to a CSV:
 
 ```sh
 BULLET_SKIP_ASSET_EXPORT=1 ROPLAT_SKIP_ASSET_EXPORT=1 \
-  cargo +nightly-2026-07-07 run -p rsbullet --no-default-features \
+  cargo +nightly-2026-10-20 run -p rsbullet --no-default-features \
   --example panda_headless -- \
   rsbullet-sys/bullet3/examples/pybullet/gym/pybullet_data panda-trace.csv
 ```
