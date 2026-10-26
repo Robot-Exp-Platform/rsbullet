@@ -123,7 +123,7 @@ Point `set_additional_search_path` at that checkout's `examples/pybullet/gym/pyb
 
 ## Optional integration and source builds
 
-The default feature set is empty. Enable `rsbullet = { version = "0.4.0", features = ["roplat"] }` to expose `SimRhythm`; ordinary simulator use does not need roplat. On the current Git preparation branch (rsbullet / rsbullet-core 0.6.0, roplat 0.5.0; not yet published), `SimRhythm` keeps ownership of its engine and declares `Resources = ()`; the new external borrow channel does not change its step policy. This new trait contract is not part of the registry 0.4.0 example above. Tokio remains a normal dependency because motion futures use its timers. The backend/transport flags such as `dart`, `physx`, `mujoco`, and `grpc` do not by themselves install or validate those external backends.
+The default feature set is empty. Enable `rsbullet = { version = "0.4.0", features = ["roplat"] }` to expose `SimRhythm`; ordinary simulator use does not need roplat. In rsbullet / rsbullet-core 0.6.0 with roplat 0.5.0, `SimRhythm` keeps ownership of its engine and declares `Resources = ()`; the new external borrow channel does not change its step policy. This new trait contract is not part of the registry 0.4.0 example above. Tokio remains a normal dependency because motion futures use its timers. The backend/transport flags such as `dart`, `physx`, `mujoco`, and `grpc` do not by themselves install or validate those external backends.
 
 For a source checkout, initialize the native source before building:
 
@@ -133,7 +133,7 @@ cd rsbullet
 git submodule update --init --recursive rsbullet-sys/bullet3
 ```
 
-Repository manifests retain pinned Git dependencies; building that source requires access to the declared Git sources. The crates.io release resolves its dependencies through the registry instead. Prefer the registry dependency above for a first application.
+Repository manifests use the same crates.io dependencies as the released packages, so a source build needs only the Bullet submodule above. Prefer the registry dependency above for a first application.
 
 ## Next steps
 
