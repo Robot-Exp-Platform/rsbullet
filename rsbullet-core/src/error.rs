@@ -2,7 +2,7 @@ use std::ffi::NulError;
 use std::fmt::{Display, Formatter};
 use std::io;
 
-use robot_behavior::RobotException;
+use roplat_behavior::RobotException;
 
 /// Represents failures that can occur while interacting with the Bullet physics server.
 #[derive(Debug)]

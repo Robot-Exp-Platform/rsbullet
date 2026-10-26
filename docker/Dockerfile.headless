@@ -1,0 +1,17 @@
+# Build environment only. Source/model revisions are supplied by the caller.
+# Pin the base image digest in an experiment manifest when comparing runs.
+FROM ubuntu:24.04
+ARG RUST_TOOLCHAIN=nightly-2026-07-07
+ENV DEBIAN_FRONTEND=noninteractive \
+    BULLET_SKIP_ASSET_EXPORT=1 \
+    ROPLAT_SKIP_ASSET_EXPORT=1
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential cmake ninja-build curl ca-certificates git pkg-config \
+    libfontconfig1-dev \
+    && rm -rf /var/lib/apt/lists/*
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/rustup-init.sh \
+    && sh /tmp/rustup-init.sh -y --profile minimal --default-toolchain "$RUST_TOOLCHAIN" \
+    && rm /tmp/rustup-init.sh
+ENV PATH="/root/.cargo/bin:${PATH}"
+WORKDIR /src
+CMD ["bash"]

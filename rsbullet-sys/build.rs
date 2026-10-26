@@ -12,26 +12,62 @@ fn lib_exists(dir: &Path, name: &str) -> bool {
 
 fn main() {
     println!("cargo:rerun-if-env-changed=BULLET_SKIP_ASSET_EXPORT");
+    for source in [
+        "bullet3/CMakeLists.txt",
+        "bullet3/src",
+        "bullet3/Extras",
+        "bullet3/examples",
+    ] {
+        println!("cargo:rerun-if-changed={source}");
+    }
+    let gui = env::var_os("CARGO_FEATURE_GUI").is_some();
+    // BulletRoboticsGUI includes RemoteGUIHelperTCP unconditionally. Its socket
+    // implementation is an internal GUI dependency, even when the public Rust
+    // TCP connection mode is disabled.
+    let native_clsocket = gui || env::var_os("CARGO_FEATURE_CLSOCKET").is_some();
+    let enabled = |value| if value { "ON" } else { "OFF" };
+    let target_os = env::var("CARGO_CFG_TARGET_OS").expect("Cargo provides target OS");
+    let target_env = env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
+    let native_libdir = PathBuf::from(env::var_os("OUT_DIR").expect("Cargo provides OUT_DIR"))
+        .join("build")
+        .join("lib");
+    if !Path::new("bullet3/CMakeLists.txt").exists() {
+        panic!(
+            "Bullet source is missing. Run: git submodule update --init --recursive rsbullet-sys/bullet3"
+        );
+    }
     let mut cfg = cmake::Config::new("bullet3");
     cfg.profile("Release")
+        // Rust links the archives directly. Installing the full Bullet SDK would
+        // copy thousands of unrelated example headers on every clean build.
+        .no_build_target(true)
+        .define("LIBRARY_OUTPUT_PATH", &native_libdir)
         .define("BUILD_SHARED_LIBS", "OFF")
-        .define("BUILD_BULLET2_DEMOS", "ON")
+        .define("BUILD_BULLET2_DEMOS", enabled(gui))
         .define("BUILD_CPU_DEMOS", "OFF")
-        .define("BUILD_OPENGL3_DEMOS", "ON")
+        .define("BUILD_OPENGL3_DEMOS", enabled(gui))
+        .define("BUILD_BULLET_ROBOTICS_GUI_EXTRA", enabled(gui))
+        .define("BUILD_BULLET_ROBOTICS_EXTRA", "ON")
+        .define(
+            "BUILD_ENET",
+            enabled(env::var_os("CARGO_FEATURE_ENET").is_some()),
+        )
+        .define("BUILD_CLSOCKET", enabled(native_clsocket))
+        .define("BUILD_EGL", enabled(gui && target_os == "linux"))
+        .define("BUILD_OBJ2SDF_EXTRA", enabled(gui))
+        .define("BUILD_CONVEX_DECOMPOSITION_EXTRA", enabled(gui))
+        .define("BUILD_HACD_EXTRA", enabled(gui))
+        .define("BUILD_GIMPACTUTILS_EXTRA", enabled(gui))
         .define("BUILD_EXTRAS", "ON")
         .define("BUILD_UNIT_TESTS", "OFF")
         .define("BUILD_PYBULLET", "OFF");
 
-    // cfg.generator("Ninja");
-
-    // cfg.define("CMAKE_MSVC_RUNTIME_LIBRARY", "MultiThreaded$<$<CONFIG:Debug>:Debug>");
-
     let dst = cfg.build();
-    let mut candidates: Vec<PathBuf> = vec![dst.join("lib")];
-    candidates.push(dst.join("build").join("lib"));
+    let mut candidates: Vec<PathBuf> = vec![dst.join("build").join("lib")];
     candidates.push(dst.join("build").join("lib").join("Release"));
     candidates.push(dst.join("build").join("lib").join("RelWithDebInfo"));
     candidates.push(dst.join("build").join("lib").join("Debug"));
+    candidates.push(dst.join("lib"));
 
     let libdir = candidates
         .into_iter()
@@ -44,6 +80,25 @@ fn main() {
         });
 
     println!("cargo:rustc-link-search=native={}", libdir.display());
+
+    for required in [
+        "BulletRobotics",
+        "BulletSoftBody",
+        "BulletDynamics",
+        "BulletCollision",
+        "LinearMath",
+        "BulletInverseDynamics",
+        "BulletInverseDynamicsUtils",
+        "BulletFileLoader",
+        "BulletWorldImporter",
+        "Bullet3Common",
+    ] {
+        assert!(
+            lib_exists(&libdir, required),
+            "required native library {required} is missing from {}",
+            libdir.display()
+        );
+    }
 
     for &lib in &[
         "BulletSoftBody",
@@ -72,31 +127,45 @@ fn main() {
         }
     }
 
-    #[cfg(all(not(target_env = "msvc"), not(target_os = "macos")))]
-    println!("cargo:rustc-link-lib=dylib=stdc++");
-
-    #[cfg(target_os = "macos")]
-    println!("cargo:rustc-link-lib=c++");
+    if target_env != "msvc" {
+        println!(
+            "cargo:rustc-link-lib=dylib={}",
+            if target_os == "macos" {
+                "c++"
+            } else {
+                "stdc++"
+            }
+        );
+    }
 
     // CMake's static-library dependencies do not propagate to Rust consumers.
     // Bullet's macOS window backend requires both system frameworks.
-    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+    if gui && target_os == "macos" {
         println!("cargo:rustc-link-lib=framework=Cocoa");
         println!("cargo:rustc-link-lib=framework=OpenGL");
     }
 
-    #[cfg(target_os = "windows")]
-    {
+    if gui && target_os == "windows" {
         println!("cargo:rustc-link-lib=dylib=User32");
         println!("cargo:rustc-link-lib=dylib=Gdi32");
         println!("cargo:rustc-link-lib=dylib=Opengl32");
         println!("cargo:rustc-link-lib=dylib=Comdlg32");
     }
 
-    if env::var_os("BULLET_SKIP_ASSET_EXPORT").as_deref() != Some(std::ffi::OsStr::new("1")) {
-        if let Err(err) = export_bullet_data() {
-            println!("cargo:warning=failed to prepare bullet data directory: {err}");
-        }
+    if target_os == "windows" && (env::var_os("CARGO_FEATURE_ENET").is_some() || native_clsocket) {
+        println!("cargo:rustc-link-lib=dylib=ws2_32");
+        println!("cargo:rustc-link-lib=dylib=winmm");
+    }
+
+    if target_os == "linux" {
+        println!("cargo:rustc-link-lib=dylib=dl");
+        println!("cargo:rustc-link-lib=dylib=pthread");
+    }
+
+    if env::var_os("BULLET_SKIP_ASSET_EXPORT").as_deref() != Some(std::ffi::OsStr::new("1"))
+        && let Err(err) = export_bullet_data()
+    {
+        println!("cargo:warning=failed to prepare bullet data directory: {err}");
     }
 }
 
