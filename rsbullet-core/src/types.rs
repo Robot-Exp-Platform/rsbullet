@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use nalgebra as na;
-use robot_behavior::Entity;
+use roplat_behavior::Entity;
 use rsbullet_sys::{self as ffi, b3JointInfo, b3KeyboardEvent, b3LinkState, b3MouseEvent};
 
 use crate::{BulletError, PhysicsClient};

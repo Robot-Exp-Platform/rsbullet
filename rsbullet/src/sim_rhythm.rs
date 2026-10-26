@@ -1,9 +1,9 @@
 use std::future::Future;
 use std::time::{Duration, Instant};
 
-use robot_behavior::PhysicsEngine;
 use roplat::rhythm::Rhythm;
 use roplat::{Completion, Execution, ExecutionContext, Lifecycle, RoplatError};
+use roplat_behavior::PhysicsEngine;
 
 use crate::RsBullet;
 

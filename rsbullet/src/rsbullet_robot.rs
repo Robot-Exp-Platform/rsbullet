@@ -3,13 +3,13 @@ use std::time::Duration;
 use std::{marker::PhantomData, sync::mpsc::Sender};
 
 use anyhow::Result;
-use robot_behavior::behavior::{Arm, EndPoint, FlangeSpace, JointSpace, Joints};
-use robot_behavior::utils::path_generate;
-use robot_behavior::{
+use roplat_behavior::behavior::{Arm, EndPoint, FlangeSpace, JointSpace, Joints};
+use roplat_behavior::{
     ArmState, ArmTorqueControl, ControlObservation, ControlObserver, ControlSpace,
     JointPositionControl, JointState, JointVelocityControl, LoadState, MoveTo, MoveTraj, Pose,
     Robot, RobotDescription, RobotException, RobotResult, TorqueControl, behavior::*,
 };
+use roplat_trajectory::path_generate;
 use rsbullet_core::{
     BulletError, BulletResult, ControlModeArray, JointType, LoadModelFlags, PhysicsClient,
     UrdfOptions,
@@ -67,7 +67,7 @@ impl<R> RsBulletRobot<R> {
     /// Register a queued control task for this simulated robot.
     ///
     /// This is rsbullet-specific and intentionally does not implement
-    /// [`robot_behavior::ControlWith`]. The method only submits the control
+    /// [`roplat_behavior::ControlWith`]. The method only submits the control
     /// closure to the simulation queue; it does not step the physics engine or
     /// wait for completion. The task is consumed by [`RsBullet::step`].
     pub fn control_with<S, F>(&self, mut controller: F) -> RobotResult<()>
@@ -309,7 +309,7 @@ where
             .lock()
             .ok()
             .map(|cache| Into::<ArmState<N>>::into(cache.clone()))
-            .and_then(|state| state.joint.meas.q)
+            .and_then(|state| state.joint.meas.q())
             .unwrap_or([0.; N])
     }
 
@@ -318,7 +318,7 @@ where
             .lock()
             .ok()
             .map(|cache| Into::<ArmState<N>>::into(cache.clone()))
-            .and_then(|state| state.flange.meas.pose)
+            .and_then(|state| state.flange.meas.pose())
             .unwrap_or_default()
     }
 
@@ -438,7 +438,7 @@ where
             .map(|cache| cache.clone().into())
             .map_err(|_| RobotException::NetworkError("state cache poisoned".to_string()))?;
         let (path_generate, t_max) = path_generate::joint_s_curve(
-            &state.joint.meas.q.unwrap_or([0.; N]),
+            &state.joint.meas.q().unwrap_or([0.; N]),
             &target,
             &R::JOINT_VEL_BOUND,
             &R::JOINT_ACC_BOUND,
@@ -540,13 +540,13 @@ where
     }
 }
 
-/// A rsbullet-specific mapping from a robot_behavior control space to Bullet
+/// A rsbullet-specific mapping from a roplat_behavior control space to Bullet
 /// observations and commands.
 ///
 /// This trait is intentionally local to rsbullet's queued simulation model. It
 /// lets [`RsBulletRobot::control_with`] keep the same type-level control-space
 /// style without claiming that `RsBulletRobot` is a normal blocking
-/// `robot_behavior::ControlWith` robot.
+/// `roplat_behavior::ControlWith` robot.
 pub trait RsBulletControlSpace<R>: ControlSpace<RsBulletRobot<R>> {
     fn initialize(
         _client: &mut PhysicsClient,

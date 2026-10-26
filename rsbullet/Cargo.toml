@@ -1,6 +1,6 @@
 [package]
 name = "rsbullet"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
 authors = [
     "Nathan Kent <nkent2@cs.rochester.edu>",
@@ -23,10 +23,11 @@ exclude = [
 ]
 
 [dependencies]
-rsbullet-core = { version = "0.6.0", path = "../rsbullet-core" }
+rsbullet-core = { version = "0.7.0", path = "../rsbullet-core" }
 rsbullet_sys = { version = "0.3.2", path = "../rsbullet-sys" }
 nalgebra = { version = "0.34.1" }
-robot_behavior = { version = "0.8.0" }
+roplat_behavior = "0.9.0"
+roplat_trajectory = "0.9.0"
 roplat = { version = "0.5.0", optional = true }
 anyhow = "1.0.100"
 futures = "0.3"

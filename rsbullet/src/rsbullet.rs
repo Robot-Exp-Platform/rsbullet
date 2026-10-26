@@ -1,6 +1,6 @@
 use std::{sync::mpsc, time::Duration};
 
-use robot_behavior::{
+use roplat_behavior::{
     AddCollision, AddRobot, AddSearchPath, AddVisual, PhysicsEngine, Renderer, RobotDescription,
 };
 use rsbullet_core::{BulletResult, Mode, PhysicsClient};
@@ -117,7 +117,7 @@ impl AddRobot for RsBullet {
 impl AddCollision for RsBullet {
     type EntityId = crate::CollisionId;
     type CB<'a> = crate::EntityBuilder<'a, crate::CollisionMarker>;
-    fn collision<'a>(&'a mut self, collision: robot_behavior::Collision<'a>) -> Self::CB<'a> {
+    fn collision<'a>(&'a mut self, collision: roplat_behavior::Collision<'a>) -> Self::CB<'a> {
         crate::EntityBuilder::collision(self, collision)
     }
 }
@@ -125,7 +125,7 @@ impl AddCollision for RsBullet {
 impl AddVisual for RsBullet {
     type EntityId = crate::VisualId;
     type VB<'a> = crate::EntityBuilder<'a, crate::VisualMarker>;
-    fn visual<'a>(&'a mut self, visual: robot_behavior::Visual<'a>) -> Self::VB<'a> {
+    fn visual<'a>(&'a mut self, visual: roplat_behavior::Visual<'a>) -> Self::VB<'a> {
         crate::EntityBuilder::visual(self, visual)
     }
 }
@@ -135,11 +135,13 @@ mod tests {
     use std::time::Duration;
 
     use nalgebra as na;
-    use robot_behavior::{AddCollision, AddRobot, AddVisual, Entity, EntityBuilder, PhysicsEngine};
+    use roplat_behavior::{
+        AddCollision, AddRobot, AddVisual, Entity, EntityBuilder, PhysicsEngine,
+    };
     use rsbullet_core::{LoadModelFlags, Mode};
 
     struct ExRobot<const N: usize>;
-    impl robot_behavior::RobotDescription for ExRobot<6> {
+    impl roplat_behavior::RobotDescription for ExRobot<6> {
         const URDF: Option<&'static str> = Some("robot.urdf");
     }
 

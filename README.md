@@ -1,6 +1,6 @@
 # RsBullet
 
-RsBullet brings Bullet physics to Rust: load robot models, create bodies, step a simulation, and inspect or control their state. Use it for simulation and algorithm development, or when you want a simulated robot to expose the same `robot_behavior` interfaces used by the driver ecosystem.
+RsBullet brings Bullet physics to Rust: load robot models, create bodies, step a simulation, and inspect or control their state. Use it for simulation and algorithm development, or when you want a simulated robot to expose the same `roplat_behavior` interfaces used by the driver ecosystem.
 
 It builds the native Bullet engine; a Python interpreter or an installed `pybullet` package is not required. This repository continues the [RuBullet](https://github.com/neachdainn/rubullet) project. The original documentation is preserved in [README_ORIGIN.md](README_ORIGIN.md).
 
@@ -18,7 +18,7 @@ Most applications should depend on `rsbullet`. The layers keep native build deta
 
 ## Prerequisites
 
-Use Rust nightly: `robot_behavior`, a normal dependency, uses unstable Rust features. The native build also needs CMake and a C++ compiler:
+Use Rust nightly: `roplat_behavior`, a normal dependency, uses unstable Rust features. The native build also needs CMake and a C++ compiler:
 
 - **Windows:** the MSVC C++ build tools, Windows SDK, and CMake on `PATH`.
 - **Linux:** C/C++ tools, CMake, OpenGL/GLU, and X11 development libraries. On Ubuntu, a starting set is `build-essential cmake libgl1-mesa-dev libglu1-mesa-dev libx11-dev libxi-dev`.
@@ -44,11 +44,13 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-rsbullet = "0.4.0"
-robot_behavior = "0.6.1"
+rsbullet = "0.7.0"
+roplat_behavior = "0.9.0"
 nalgebra = "0.34"
 anyhow = "1"
 ```
+
+> `roplat_behavior` 0.9 (the renamed `robot_behavior`) and this release are not on crates.io yet; until they are, build from the [drives](https://github.com/Robot-Exp-Platform/drives) workspace. See the [migration notes](https://github.com/Robot-Exp-Platform/roplat_behavior/blob/main/MIGRATION.md).
 
 `src/main.rs`:
 
@@ -56,7 +58,7 @@ anyhow = "1"
 use std::time::Duration;
 
 use nalgebra::Isometry3;
-use robot_behavior::PhysicsEngine;
+use roplat_behavior::PhysicsEngine;
 use rsbullet::{
     CollisionGeometry, CollisionId, CollisionShapeOptions, Mode,
     MultiBodyBase, MultiBodyCreateOptions, RsBullet,
@@ -109,7 +111,7 @@ The program prints a height below the initial `2.0` and exits. It creates its co
 
 ## Loading your own robot
 
-Supply a URDF and every mesh it references. Implement `robot_behavior::RobotDescription` with `URDF = Some("your_robot.urdf")`, add the model's directory with `sim.add_search_path(...)`, then call `sim.robot_builder::<YourRobot>("robot").base_fixed(true).load()?`. Import the `AddSearchPath`, `AddRobot`, and `EntityBuilder` traits for these methods.
+Supply a URDF and every mesh it references. Implement `roplat_behavior::RobotDescription` with `URDF = Some("your_robot.urdf")`, add the model's directory with `sim.add_search_path(...)`, then call `sim.robot_builder::<YourRobot>("robot").base_fixed(true).load()?`. Import the `AddSearchPath`, `AddRobot`, and `EntityBuilder` traits for these methods.
 
 The builder returns `RsBulletRobot<YourRobot>`. Its `body_id`, `joint_indices`, and `joint_names` connect the typed handle to Bullet. The joint list selects revolute and prismatic joints; extra behavior traits on your robot description are needed for the corresponding typed motion APIs. For lower-level model loading or per-joint commands, use `PhysicsClient` directly. Poses use `nalgebra::Isometry3<f64>`; distinguish world/link poses from a joint's relative coordinate when interpreting state.
 
