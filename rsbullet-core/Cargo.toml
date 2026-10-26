@@ -23,16 +23,17 @@ exclude = [
 ]
 
 [dependencies]
-rsbullet_sys = { version = "0.3.2", path = "../rsbullet-sys" }
+rsbullet_sys = { version = "0.3.3", path = "../rsbullet-sys", default-features = false }
 nalgebra = { version = "0.34.1" }
 bitflags = "2.9.4"
-robot_behavior = { version = "0.8.0", git = "ssh://git@github.com/Robot-Exp-Platform/robot_behavior.git", rev = "1f6bf80e6fa18cfb331ea5c18db790cc85ef8e8d" }
+robot_behavior = { version = "0.8.0", git = "ssh://git@github.com/Robot-Exp-Platform/robot_behavior.git", rev = "b9198fabd2b2c84ef5333474129a33b9fedeb32e" }
 
 [features]
-default = []
+default = ["gui"]
+gui = ["rsbullet_sys/gui"]
 dart = []
 physx = []
 mujoco = []
 grpc = []
-enet = []
-clsocket = []
+enet = ["rsbullet_sys/enet"]
+clsocket = ["rsbullet_sys/clsocket"]

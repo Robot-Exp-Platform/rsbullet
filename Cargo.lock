@@ -1123,7 +1123,7 @@ dependencies = [
 [[package]]
 name = "robot_behavior"
 version = "0.8.0"
-source = "git+ssh://git@github.com/Robot-Exp-Platform/robot_behavior.git?rev=1f6bf80e6fa18cfb331ea5c18db790cc85ef8e8d#1f6bf80e6fa18cfb331ea5c18db790cc85ef8e8d"
+source = "git+ssh://git@github.com/Robot-Exp-Platform/robot_behavior.git?rev=b9198fabd2b2c84ef5333474129a33b9fedeb32e#b9198fabd2b2c84ef5333474129a33b9fedeb32e"
 dependencies = [
  "anyhow",
  "copp",
@@ -1132,9 +1132,11 @@ dependencies = [
  "nalgebra",
  "paste",
  "plotters",
+ "roplat",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+ "tokio",
  "winapi",
 ]
 
@@ -1200,12 +1202,13 @@ name = "rsbullet"
 version = "0.6.0"
 dependencies = [
  "anyhow",
- "futures",
  "nalgebra",
  "robot_behavior",
  "roplat",
  "rsbullet-core",
  "rsbullet_sys",
+ "serde",
+ "serde_json",
  "tokio",
 ]
 
@@ -1221,7 +1224,7 @@ dependencies = [
 
 [[package]]
 name = "rsbullet_sys"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "cmake",
 ]

@@ -1,0 +1,153 @@
+# Native simulation for robot applications
+
+RsBullet connects Rust directly to Bullet's native C API. Python/PyBullet is not
+part of this execution path. Use the [source build instructions](source-build.md)
+for the exact Git dependencies, native source submodule and headless features.
+
+## Choose the right layer
+
+| Layer | Responsibility |
+| --- | --- |
+| `PhysicsClient` | Scene creation, URDF loading, native IK, motor commands, actual state, contacts, cameras |
+| `RsBullet` | Ordered queued controls, one native integration, then state/observation refresh |
+| `RsBulletRobot<R>` | Selected robot joints, cached actual state, typed queued joint control |
+| `SimRhythm<E>` | Compatibility alias for `robot_behavior::roplat::SimulationRhythm<E>`, defaulting to `RsBullet` |
+| Application Nodes | Task planning, feedback, commands and evidence processing |
+
+The finite [Panda example](../rsbullet/examples/panda_headless.rs) uses the raw
+physics layer, explicit effort caps, actual end-effector readback, and CSV output.
+It requires a pinned Bullet model directory and an output path:
+
+```sh
+BULLET_SKIP_ASSET_EXPORT=1 ROPLAT_SKIP_ASSET_EXPORT=1 \
+  cargo +nightly-2025-11-20 run -p rsbullet --no-default-features \
+  --example panda_headless -- \
+  rsbullet-sys/bullet3/examples/pybullet/gym/pybullet_data panda-trace.csv
+```
+
+It performs 2,400 native integrations and checks two reached poses. This is a
+low-level integration example, not a manipulation or perception benchmark.
+
+## Match a device to its backend
+
+`RobotDescription::SIMULATION_MODELS` offers models, optionally restricted to a
+backend. `SimulationBackend` selects compatible formats. RsBullet's typed robot
+builder declares backend `bullet` and format URDF; its lower-level scene APIs
+are separate. Existing `RobotDescription::URDF` remains a fallback.
+
+Selection does not convert models or prove equal actuator, sensor, collision or
+dynamic behavior across simulators. A selected model that fails loading produces
+an error; it is not silently replaced by a different physical model.
+
+Select the controlled joints explicitly when a device contains several parts:
+
+```rust,ignore
+let arm = engine.robot_builder::<Panda>("arm")
+    .joint_names([
+        "panda_joint1", "panda_joint2", "panda_joint3", "panda_joint4",
+        "panda_joint5", "panda_joint6", "panda_joint7",
+    ])
+    .end_effector_link_name("panda_grasptarget")
+    .base_fixed(true)
+    .load()?;
+```
+
+The two finger joints remain part of the same physical body. Control them through
+their native indices with explicit force bounds. Requested joint order is
+preserved; duplicate, fixed, unknown joints and missing named end effectors are
+rejected. A failed builder configuration removes the body it just created.
+
+## Time and state ordering
+
+Set the physics timestep on the engine. `SimRhythm::logical(engine)` adds no
+wall-clock delay; `SimRhythm::new(engine, period)` paces tick starts. Wall pacing
+does not change physics dt and never skips physics steps to catch up.
+
+The generic scheduler lives in `robot_behavior` behind its optional `roplat`
+feature. Other `PhysicsEngine` backends can use `SimulationRhythm<E>` directly
+without a Bullet dependency; RsBullet retains its existing constructor names.
+
+Use `.with_max_steps(n)` for a finite run. The budget is per drive; driving again
+continues the same world with a new budget. Zero completes without integration.
+The existing unit Yield/Feed contract remains valid. Use `#[roplat::system]` for
+application node connections instead of manually calling `Node::process`.
+
+One successful `RsBullet::step()` performs these operations in order:
+
+1. Admit queued controls and execute active controls in submission order.
+2. Integrate Bullet once.
+3. Refresh loaded robot state and registered `add_step_observer` callbacks.
+4. Return to the rhythm, which executes its downstream graph domain.
+
+A graph command queued after observation takes effect at the next integration.
+`RsBullet::steps_completed()` and `RsBullet::simulated_time()` describe native integrations. If a
+post-step observer fails, the physical integration still counts. The rhythm's
+counter counts successful engine step calls, so it may be smaller in that case.
+
+Queued callbacks must not independently integrate or reset the world; those
+transitions belong to the engine. Observers receive a mutable native client because Bullet queries require it.
+Keep them observational: mutating the world from an observer would change the
+meaning of the evidence and is the application's responsibility. The older
+control `before`/`after` callbacks surround controller calculation using
+pre-integration state; use `add_step_observer` for post-integration evidence.
+
+`LinkState::world` is the inertial center-of-mass pose; `world_link_frame` is the
+URDF link origin. Typed arm flange state uses the link origin and transforms COM
+linear velocity to that origin. When velocity computation was requested, a
+computed zero velocity remains a valid measurement; omitted computation is
+`None`. Query AABBs separately; Bullet does not fill them in
+its link-state response.
+
+IK targets are always expressed in world coordinates, including when
+`current_positions` supplies an initial joint seed. RsBullet accounts for
+Bullet's seeded-IK base-COM convention internally. Do not add a compensating
+base/inertial offset to the application target.
+
+IK rejects invalid link indices and requests beyond Bullet's command capacity.
+Nullspace limits/ranges/rest poses must be supplied together with matching
+dimensions. Multi-target IK with nullspace parameters is explicitly unsupported;
+the native helper would otherwise silently reduce the request to one target.
+
+## Failure, reset and limits
+
+An engine step error stops the rhythm before another downstream tick and retains
+the underlying error. Pacing waits respond to cooperative stop; an already
+running domain is allowed to return its owned nodes before exit.
+
+A command, integration or observer failure latches the engine as faulted. Reset
+or replace the world before stepping again. `RsBullet::reset()` (the
+`PhysicsEngine` method) clears controls and observers,
+resets counters, and invalidates old robot handles. Fault and engine destruction
+also invalidate those handles. `read_state()`, typed `state()` and queued command
+submission return errors for invalid handles. The legacy infallible convenience
+getters cannot report validity; use the fallible state APIs for evidence.
+
+The public `RsBullet::client` field is a low-level escape hatch. Resetting it
+directly, removing managed bodies, integrating independently, or changing its
+timestep bypasses the engine's handle validity, cached state and counters. Those
+operations are unsupported while using managed robot handles; use engine
+lifecycle and timestep methods instead. Standalone `PhysicsClient` applications
+own these responsibilities themselves.
+
+High-level joint control intersects declared effort bounds with positive finite
+URDF effort limits. If the model provides no limit, supply a usable finite bound
+in the robot description. Position/velocity motor commands and explicit torque
+commands use these bounds. This is not a claim of physical safety or force
+fidelity. Native `PhysicsClient` commands remain caller-controlled: always supply
+explicit limits for position/velocity control and explicitly bound torque values.
+
+Current boundaries: generic Cartesian `MoveTo` is unsupported (use native IK);
+generic payload mutation reports unsupported; legacy `Arm::with_*` setters do
+not configure this simulator. Use robot-description constants, explicit native
+commands and actual model dynamics instead. Queued control submission is not a
+blocking hardware control session and is not completion of physical motion.
+
+## Preserve useful evidence
+
+Keep source/lock/toolchain/model revisions, initial conditions, physics dt,
+solver settings, collision flags, actual per-step state and contacts, commands,
+termination outcome, and wall time. Record controller/observation ordering.
+Use separate initialization and task phases; do not reset object poses during
+a claimed physical grasp. Record unsupported configurations and failed runs.
+Finite tests and simulator results do not establish hardware readiness or full
+PyBullet API parity.

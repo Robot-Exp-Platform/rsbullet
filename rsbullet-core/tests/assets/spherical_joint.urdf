@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<robot name="spherical_joint_contract">
+  <link name="base">
+    <inertial><mass value="1"/><inertia ixx="0.01" ixy="0" ixz="0" iyy="0.01" iyz="0" izz="0.01"/></inertial>
+  </link>
+  <link name="rotor">
+    <inertial><mass value="1"/><inertia ixx="0.004" ixy="0" ixz="0" iyy="0.004" iyz="0" izz="0.004"/></inertial>
+    <collision><geometry><sphere radius="0.1"/></geometry></collision>
+  </link>
+  <!-- Spherical is Bullet's URDF extension, with quaternion q and 3 angular DOFs. -->
+  <joint name="ball" type="spherical">
+    <parent link="base"/><child link="rotor"/>
+    <axis xyz="1 0 0"/>
+    <limit effort="0.2" velocity="4"/>
+  </joint>
+</robot>

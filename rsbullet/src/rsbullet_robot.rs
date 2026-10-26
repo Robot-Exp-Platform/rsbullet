@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::{marker::PhantomData, sync::mpsc::Sender};
@@ -7,8 +8,9 @@ use robot_behavior::behavior::{Arm, EndPoint, FlangeSpace, JointSpace, Joints};
 use robot_behavior::utils::path_generate;
 use robot_behavior::{
     ArmState, ArmTorqueControl, ControlObservation, ControlObserver, ControlSpace,
-    JointPositionControl, JointState, JointVelocityControl, LoadState, MoveTo, MoveTraj, Pose,
-    Robot, RobotDescription, RobotException, RobotResult, TorqueControl, behavior::*,
+    JointPositionControl, JointState, JointVelocityControl, LoadState, ModelSelectionError, MoveTo,
+    MoveTraj, Pose, Robot, RobotDescription, RobotException, RobotResult, SimulationBackend,
+    TorqueControl, behavior::*,
 };
 use rsbullet_core::{
     BulletError, BulletResult, ControlModeArray, JointType, LoadModelFlags, PhysicsClient,
@@ -37,6 +39,14 @@ fn notify_control_observers(
     }
 }
 
+/// A handle into one owned simulation world.
+///
+/// Fallible `Robot::read_state` and `Arm::state` return the latest successfully
+/// refreshed native state and reject a handle after engine fault/reset/drop.
+/// The legacy infallible `Arm::get_joint` / `get_endpoint` conveniences cannot
+/// report validity and return their fallback values on failure; do not use them
+/// as measurement evidence. The `Arm::with_*` setters remain compatibility
+/// no-ops: configure the description's joint limits and explicit native motors.
 pub struct RsBulletRobot<R> {
     pub body_id: i32,
     pub joint_indices: Vec<i32>,
@@ -44,20 +54,41 @@ pub struct RsBulletRobot<R> {
     pub(crate) command_sender: Sender<QueuedControl>,
     pub end_effector_link: i32,
     state_cache: Arc<Mutex<RsBulletRobotState>>,
+    world_validity: Arc<AtomicBool>,
     before_observers: RsBulletControlObservers,
     after_observers: RsBulletControlObservers,
-    /// Control period for rate-limiting simulation. If the simulation step completes
-    /// faster than this duration, the step callback will sleep for the remaining time.
-    /// Typically set to match the desired control frequency (e.g., 1ms for 1kHz).
+    /// Legacy metadata only; this field does not sleep or change the physics dt.
+    /// Configure `RsBullet::set_step_time` and `SimRhythm` pacing explicitly.
     pub control_period: Duration,
     _marker: PhantomData<R>,
 }
 
 impl<R> RsBulletRobot<R> {
+    /// False after the owning engine faults, resets, or is dropped. Reload the
+    /// robot in a valid world; an old body ID must not address a replacement body.
+    pub fn is_valid(&self) -> bool {
+        self.world_validity.load(Ordering::Acquire)
+    }
+
+    fn ensure_valid(&self) -> RobotResult<()> {
+        if self.is_valid() {
+            Ok(())
+        } else {
+            Err(RobotException::CommandException(
+                "simulation robot handle is invalid after engine fault, reset, or shutdown".into(),
+            ))
+        }
+    }
+
+    /// Register a callback executed before native integration. Return `true` to
+    /// remove it after this invocation, or `false` to run it at the next step.
+    /// Use the client for queries and commands, never to integrate/reset the world;
+    /// those transitions and their accounting belong to the owning engine.
     pub fn enqueue<CF>(&self, control: CF) -> anyhow::Result<()>
     where
         CF: FnMut(&mut PhysicsClient, Duration) -> BulletResult<bool> + Send + 'static,
     {
+        self.ensure_valid()?;
         self.command_sender
             .send(Box::new(control))
             .map_err(|_| anyhow::anyhow!("Failed to send control command: channel closed"))?;
@@ -70,6 +101,9 @@ impl<R> RsBulletRobot<R> {
     /// [`robot_behavior::ControlWith`]. The method only submits the control
     /// closure to the simulation queue; it does not step the physics engine or
     /// wait for completion. The task is consumed by [`RsBullet::step`].
+    /// The `before` / `after` hooks bracket the controller and observe the same
+    /// pre-integration sample. Use [`RsBullet::add_step_observer`] for post-step
+    /// object/contact evidence, or `read_state` after a successful engine step.
     pub fn control_with<S, F>(&self, mut controller: F) -> RobotResult<()>
     where
         S: RsBulletControlSpace<R> + Send + 'static,
@@ -115,7 +149,7 @@ impl<R> RsBulletRobot<R> {
 pub struct RsBulletRobotBuilder<'a, R> {
     pub(crate) _marker: PhantomData<R>,
     pub(crate) rsbullet: &'a mut RsBullet,
-    pub(crate) load_file: &'static str,
+    pub(crate) load_file: std::result::Result<&'static str, ModelSelectionError>,
     pub(crate) base: Option<nalgebra::Isometry3<f64>>,
     pub(crate) base_fixed: bool,
     pub(crate) use_maximal_coordinates: Option<bool>,
@@ -123,6 +157,12 @@ pub struct RsBulletRobotBuilder<'a, R> {
     pub(crate) flags: Option<LoadModelFlags>,
     pub(crate) end_effector_link: Option<i32>,
     pub(crate) end_effector_link_name: Option<String>,
+    controlled_joints: Option<ControlledJoints>,
+}
+
+enum ControlledJoints {
+    Indices(Vec<i32>),
+    Names(Vec<String>),
 }
 
 impl<'a, R: RobotDescription> RsBulletRobotBuilder<'a, R> {
@@ -130,7 +170,7 @@ impl<'a, R: RobotDescription> RsBulletRobotBuilder<'a, R> {
         RsBulletRobotBuilder {
             _marker: PhantomData,
             rsbullet,
-            load_file: R::URDF.expect("robot description must provide a URDF path"),
+            load_file: RsBullet::select_robot_model::<R>().map(|selected| selected.model.path),
             base: None,
             base_fixed: false,
             scaling: None,
@@ -138,11 +178,32 @@ impl<'a, R: RobotDescription> RsBulletRobotBuilder<'a, R> {
             use_maximal_coordinates: None,
             end_effector_link: None,
             end_effector_link_name: None,
+            controlled_joints: None,
         }
     }
 }
 
 impl<R> RsBulletRobotBuilder<'_, R> {
+    /// Select and order the movable joints controlled by this handle.
+    /// Useful for an arm model that also contains separately controlled fingers.
+    /// Duplicate, fixed, or absent joints are rejected when loading.
+    pub fn joint_indices(mut self, indices: impl Into<Vec<i32>>) -> Self {
+        self.controlled_joints = Some(ControlledJoints::Indices(indices.into()));
+        self
+    }
+
+    /// Select controlled joints by their URDF joint names, in command-array order.
+    pub fn joint_names<I, S>(mut self, names: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.controlled_joints = Some(ControlledJoints::Names(
+            names.into_iter().map(Into::into).collect(),
+        ));
+        self
+    }
+
     pub fn use_maximal_coordinates(mut self, use_maximal: bool) -> Self {
         self.use_maximal_coordinates = Some(use_maximal);
         self
@@ -185,8 +246,13 @@ impl<'a, R> EntityBuilder<'a> for RsBulletRobotBuilder<'a, R> {
         self
     }
     fn load(self) -> Result<RsBulletRobot<R>> {
+        anyhow::ensure!(
+            !self.rsbullet.is_faulted(),
+            "reset the faulted simulation before loading robots"
+        );
+        let load_file = self.load_file?;
         let body_id = self.rsbullet.client_mut().load_urdf(
-            self.load_file,
+            load_file,
             Some(UrdfOptions {
                 base: self.base,
                 use_fixed_base: self.base_fixed,
@@ -196,56 +262,115 @@ impl<'a, R> EntityBuilder<'a> for RsBulletRobotBuilder<'a, R> {
             }),
         )?;
 
-        let joint_count = self.rsbullet.client_mut().get_num_joints(body_id);
-        let mut joint_indices = Vec::new();
-        let mut joint_names = Vec::new();
-        for i in 0..joint_count {
-            let info = self.rsbullet.client_mut().get_joint_info(body_id, i)?;
-            if matches!(info.joint_type, JointType::Revolute | JointType::Prismatic) {
-                joint_indices.push(i);
-                joint_names.push(info.joint_name.clone());
-            }
-        }
-
-        let end_effector_link = if let Some(idx) = self.end_effector_link {
-            idx
-        } else if let Some(name) = &self.end_effector_link_name {
-            let mut selected = None;
+        let setup = (|| -> Result<_> {
+            let joint_count = self.rsbullet.client_mut().get_num_joints(body_id);
+            let mut joint_indices = Vec::new();
+            let mut joint_names = Vec::new();
             for i in 0..joint_count {
                 let info = self.rsbullet.client_mut().get_joint_info(body_id, i)?;
-                if info.link_name == *name {
-                    selected = Some(i);
-                    break;
+                if matches!(info.joint_type, JointType::Revolute | JointType::Prismatic) {
+                    joint_indices.push(i);
+                    joint_names.push(info.joint_name.clone());
                 }
             }
-            selected.unwrap_or_else(|| {
-                if joint_count == 0 {
-                    -1
-                } else {
-                    joint_count - 1
+
+            if let Some(selection) = self.controlled_joints {
+                let selected = match selection {
+                    ControlledJoints::Indices(indices) => indices,
+                    ControlledJoints::Names(names) => names
+                        .iter()
+                        .map(|name| {
+                            joint_names
+                                .iter()
+                                .position(|found| found == name)
+                                .map(|index| joint_indices[index])
+                                .ok_or_else(|| {
+                                    anyhow::anyhow!(
+                                        "controlled joint {name:?} is absent or not movable"
+                                    )
+                                })
+                        })
+                        .collect::<Result<Vec<_>>>()?,
+                };
+                let mut unique = std::collections::HashSet::new();
+                let mut selected_names = Vec::with_capacity(selected.len());
+                for index in &selected {
+                    anyhow::ensure!(
+                        unique.insert(*index),
+                        "duplicate controlled joint index {index}"
+                    );
+                    let position = joint_indices
+                        .iter()
+                        .position(|found| found == index)
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "controlled joint index {index} is absent or not movable"
+                            )
+                        })?;
+                    selected_names.push(joint_names[position].clone());
                 }
-            })
-        } else {
-            if joint_count == 0 {
+                joint_indices = selected;
+                joint_names = selected_names;
+            }
+
+            let end_effector_link = if let Some(idx) = self.end_effector_link {
+                anyhow::ensure!(
+                    idx >= -1 && idx < joint_count,
+                    "end-effector link index {idx} is outside the loaded model"
+                );
+                idx
+            } else if let Some(name) = &self.end_effector_link_name {
+                let mut selected = None;
+                for i in 0..joint_count {
+                    let info = self.rsbullet.client_mut().get_joint_info(body_id, i)?;
+                    if info.link_name == *name {
+                        selected = Some(i);
+                        break;
+                    }
+                }
+                selected.ok_or_else(|| {
+                    anyhow::anyhow!("end-effector link {name:?} is absent from the loaded model")
+                })?
+            } else if joint_count == 0 {
                 -1
             } else {
                 joint_count - 1
-            }
-        };
+            };
 
-        let joint_states = self
-            .rsbullet
-            .client_mut()
-            .get_joint_states(body_id, &joint_indices)?;
-        let link_state = if end_effector_link >= 0 {
-            Some(self.rsbullet.client_mut().get_link_state(
-                body_id,
+            let joint_states = self
+                .rsbullet
+                .client_mut()
+                .get_joint_states(body_id, &joint_indices)?;
+            let link_state = if end_effector_link >= 0 {
+                Some(self.rsbullet.client_mut().get_link_state(
+                    body_id,
+                    end_effector_link,
+                    true,
+                    true,
+                )?)
+            } else {
+                None
+            };
+            Ok((
+                joint_indices,
+                joint_names,
                 end_effector_link,
-                true,
-                true,
-            )?)
-        } else {
-            None
+                joint_states,
+                link_state,
+            ))
+        })();
+        let (joint_indices, joint_names, end_effector_link, joint_states, link_state) = match setup
+        {
+            Ok(state) => state,
+            Err(error) => {
+                // Failed configuration must not leave an untracked loaded body behind.
+                if let Err(cleanup) = self.rsbullet.client_mut().remove_body(body_id) {
+                    return Err(
+                        error.context(format!("also failed to remove incomplete robot: {cleanup}"))
+                    );
+                }
+                return Err(error);
+            }
         };
         let state_cache = Arc::new(Mutex::new(RsBulletRobotState { joint_states, link_state }));
 
@@ -262,27 +387,29 @@ impl<'a, R> EntityBuilder<'a> for RsBulletRobotBuilder<'a, R> {
             command_sender: sender,
             end_effector_link,
             state_cache,
+            world_validity: self.rsbullet.world_validity(),
             before_observers: control_observers(),
             after_observers: control_observers(),
             control_period: Duration::from_secs_f64(1.0 / 240.0),
             _marker: PhantomData,
         };
 
-        robot.enqueue(move |client, _| {
-            let joint_states = client.get_joint_states(body_id, &joint_indices_clone)?;
-            let link_state = if end_effector_link_clone >= 0 {
-                Some(client.get_link_state(body_id, end_effector_link_clone, true, true)?)
-            } else {
-                None
-            };
-            let mut cache = cache_clone.lock().map_err(|_| BulletError::CommandFailed {
-                message: "state cache poisoned",
-                code: -1,
-            })?;
-            cache.joint_states = joint_states;
-            cache.link_state = link_state;
-            Ok(false)
-        })?;
+        self.rsbullet
+            .register_state_refresh(Box::new(move |client| {
+                let joint_states = client.get_joint_states(body_id, &joint_indices_clone)?;
+                let link_state = if end_effector_link_clone >= 0 {
+                    Some(client.get_link_state(body_id, end_effector_link_clone, true, true)?)
+                } else {
+                    None
+                };
+                let mut cache = cache_clone.lock().map_err(|_| BulletError::CommandFailed {
+                    message: "state cache poisoned",
+                    code: -1,
+                })?;
+                cache.joint_states = joint_states;
+                cache.link_state = link_state;
+                Ok(())
+            }));
 
         Ok(robot)
     }
@@ -293,6 +420,8 @@ where
     R: Joints<N> + EndPoint,
 {
     fn state(&mut self) -> RobotResult<ArmState<N>> {
+        self.ensure_valid()?;
+        checked_joints::<N>(&self.joint_indices)?;
         let cache = self
             .state_cache
             .lock()
@@ -301,10 +430,17 @@ where
     }
 
     fn set_load(&mut self, _load: LoadState) -> RobotResult<()> {
-        Ok(())
+        Err(RobotException::UnprocessableInstructionError(
+            "RsBullet does not apply payload inertia through Arm::set_load; configure the physical model explicitly".into(),
+        ))
     }
 
     fn get_joint(&self) -> [f64; N] {
+        // This legacy infallible convenience API has no validity channel.
+        // Use `state` / `read_state` for measurements and error handling.
+        if !self.is_valid() {
+            return [0.; N];
+        }
         self.state_cache
             .lock()
             .ok()
@@ -314,6 +450,9 @@ where
     }
 
     fn get_endpoint(&self) -> Pose {
+        if !self.is_valid() {
+            return Pose::default();
+        }
         self.state_cache
             .lock()
             .ok()
@@ -366,6 +505,7 @@ impl<R> Robot for RsBulletRobot<R> {
     }
 
     fn read_state(&mut self) -> RobotResult<Self::State> {
+        self.ensure_valid()?;
         self.state_cache
             .lock()
             .map(|cache| cache.clone())
@@ -429,6 +569,9 @@ where
     R: Joints<N>,
 {
     fn move_to(&mut self, target: [f64; N]) -> RobotResult<()> {
+        self.ensure_valid()?;
+        checked_joints::<N>(&self.joint_indices)?;
+        let target = clamp_position(target, R::JOINT_MIN, R::JOINT_MAX)?;
         let body_id = self.body_id;
         let joint_indices = self.joint_indices.clone();
 
@@ -449,11 +592,12 @@ where
         self.enqueue(move |client, dt| {
             duration += dt;
             let target = path_generate(duration);
+            let limits = joint_effort_limits::<R, N>(client, body_id, &joint_indices)?;
             client.set_joint_motor_control_array(
                 body_id,
-                &joint_indices[0..N],
+                checked_joints::<N>(&joint_indices)?,
                 ControlModeArray::Position(&target),
-                None,
+                Some(&limits),
             )?;
 
             Ok(duration >= t_max)
@@ -480,17 +624,21 @@ where
     R: Joints<N>,
 {
     fn move_traj(&mut self, path: Vec<[f64; N]>) -> RobotResult<()> {
+        self.ensure_valid()?;
+        checked_joints::<N>(&self.joint_indices)?;
         let body_id = self.body_id;
         let joint_indices = self.joint_indices.clone();
         let mut path = path.into_iter();
 
         self.enqueue(move |client, _| match path.next() {
             Some(joint) => {
+                let joint = clamp_position(joint, R::JOINT_MIN, R::JOINT_MAX)?;
+                let limits = joint_effort_limits::<R, N>(client, body_id, &joint_indices)?;
                 client.set_joint_motor_control_array(
                     body_id,
-                    &joint_indices[0..N],
+                    checked_joints::<N>(&joint_indices)?,
                     ControlModeArray::Position(&joint),
-                    None,
+                    Some(&limits),
                 )?;
                 Ok(false)
             }
@@ -585,6 +733,37 @@ fn checked_joints<const N: usize>(joint_indices: &[i32]) -> BulletResult<&[i32]>
     Ok(&joint_indices[..N])
 }
 
+/// Intersect declared actuator limits with finite positive URDF effort limits.
+/// A missing URDF limit requires an explicit usable description limit; `f64::MAX`
+/// is robot_behavior's unspecified default, not a physically meaningful effort.
+fn joint_effort_limits<R: Joints<N>, const N: usize>(
+    client: &mut PhysicsClient,
+    body_id: i32,
+    joint_indices: &[i32],
+) -> BulletResult<[f64; N]> {
+    let joints = checked_joints::<N>(joint_indices)?;
+    let mut limits = R::TORQUE_BOUND;
+    for (index, &joint) in joints.iter().enumerate() {
+        let declared = limits[index];
+        if !declared.is_finite() || declared < 0.0 {
+            return Err(bullet_error(
+                "declared joint effort limits must be finite and nonnegative",
+            ));
+        }
+        let native = client.get_joint_info(body_id, joint)?.max_force;
+        limits[index] = if native.is_finite() && native > 0.0 {
+            declared.min(native)
+        } else if declared < f64::MAX {
+            declared
+        } else {
+            return Err(bullet_error(
+                "joint needs a finite URDF effort limit or an explicit TORQUE_BOUND",
+            ));
+        };
+    }
+    Ok(limits)
+}
+
 fn read_robot_state(
     client: &mut PhysicsClient,
     body_id: i32,
@@ -619,23 +798,37 @@ fn read_arm_state<const N: usize>(
     Ok(read_robot_state(client, body_id, joint_indices, end_effector_link, cache)?.into())
 }
 
-fn clamp_by<const N: usize>(mut values: [f64; N], limit: [f64; N]) -> [f64; N] {
+fn clamp_by<const N: usize>(mut values: [f64; N], limit: [f64; N]) -> BulletResult<[f64; N]> {
     for i in 0..N {
+        if !values[i].is_finite() || !limit[i].is_finite() || limit[i] < 0.0 {
+            return Err(bullet_error(
+                "joint commands and nonnegative limits must be finite",
+            ));
+        }
         let bound = limit[i].abs();
         values[i] = values[i].clamp(-bound, bound);
     }
-    values
+    Ok(values)
 }
 
 fn clamp_position<const N: usize>(
     mut values: [f64; N],
     lower: [f64; N],
     upper: [f64; N],
-) -> [f64; N] {
+) -> BulletResult<[f64; N]> {
     for i in 0..N {
+        if !values[i].is_finite()
+            || !lower[i].is_finite()
+            || !upper[i].is_finite()
+            || lower[i] > upper[i]
+        {
+            return Err(bullet_error(
+                "joint positions and ordered limits must be finite",
+            ));
+        }
         values[i] = values[i].clamp(lower[i], upper[i]);
     }
-    values
+    Ok(values)
 }
 
 fn disable_default_motor<const N: usize>(
@@ -682,12 +875,13 @@ where
         command: [f64; N],
     ) -> BulletResult<()> {
         let joints = checked_joints::<N>(joint_indices)?;
-        let command = clamp_position(command, R::JOINT_MIN, R::JOINT_MAX);
+        let command = clamp_position(command, R::JOINT_MIN, R::JOINT_MAX)?;
+        let limits = joint_effort_limits::<R, N>(client, body_id, joint_indices)?;
         client.set_joint_motor_control_array(
             body_id,
             joints,
             ControlModeArray::Position(&command),
-            None,
+            Some(&limits),
         )
     }
 }
@@ -720,12 +914,13 @@ where
         command: [f64; N],
     ) -> BulletResult<()> {
         let joints = checked_joints::<N>(joint_indices)?;
-        let command = clamp_by(command, R::JOINT_VEL_BOUND);
+        let command = clamp_by(command, R::JOINT_VEL_BOUND)?;
+        let limits = joint_effort_limits::<R, N>(client, body_id, joint_indices)?;
         client.set_joint_motor_control_array(
             body_id,
             joints,
             ControlModeArray::Velocity(&command),
-            None,
+            Some(&limits),
         )
     }
 }
@@ -766,7 +961,8 @@ where
         command: [f64; N],
     ) -> BulletResult<()> {
         let joints = checked_joints::<N>(joint_indices)?;
-        let command = clamp_by(command, R::TORQUE_BOUND);
+        let limits = joint_effort_limits::<R, N>(client, body_id, joint_indices)?;
+        let command = clamp_by(command, limits)?;
         client.set_joint_motor_control_array(
             body_id,
             joints,
@@ -811,7 +1007,8 @@ where
         command: [f64; N],
     ) -> BulletResult<()> {
         let joints = checked_joints::<N>(joint_indices)?;
-        let command = clamp_by(command, R::TORQUE_BOUND);
+        let limits = joint_effort_limits::<R, N>(client, body_id, joint_indices)?;
+        let command = clamp_by(command, limits)?;
         client.set_joint_motor_control_array(
             body_id,
             joints,
@@ -820,257 +1017,3 @@ where
         )
     }
 }
-
-/*
-    fn joint_impedance_async(
-        &mut self,
-        stiffness: &[f64; N],
-        damping: &[f64; N],
-    ) -> RobotResult<JointImpedanceHandle<N>> {
-        let handle = JointImpedanceHandle {
-            stiffness: Arc::new(Mutex::new(*stiffness)),
-            damping: Arc::new(Mutex::new(*damping)),
-            target: Arc::new(Mutex::new(None)),
-            is_finished: Arc::new(AtomicBool::new(false)),
-        };
-
-        let stiffness_clone = handle.stiffness.clone();
-        let damping_clone = handle.damping.clone();
-        let target_clone = handle.target.clone();
-        let is_finished_clone = handle.is_finished.clone();
-
-        let body_id = self.body_id;
-        let joint_indices = self.joint_indices.clone();
-        let cache_clone = self.state_cache.clone();
-        let zero_velocity = vec![0.0; N];
-        let zero_force = vec![0.0; N];
-        let mut torque_mode_initialized = false;
-
-        self.enqueue(move |client, _| {
-            let state: ArmState<N> = {
-                let cache = cache_clone.lock().map_err(|_| BulletError::CommandFailed {
-                    message: "state cache poisoned",
-                    code: -1,
-                })?;
-                cache.clone().into()
-            };
-
-            let q = state.joint.meas.q.unwrap_or([0.; N]);
-            let dq = state.joint.meas.dq.unwrap_or([0.; N]);
-            let target = {
-                let t = target_clone.lock().unwrap();
-                t.unwrap_or(q)
-            };
-            let stiffness = *stiffness_clone.lock().unwrap();
-            let damping = *damping_clone.lock().unwrap();
-
-            // PD control: tau = K * (q_d - q) - D * dq
-            let mut torque = [0.0; N];
-            for i in 0..N {
-                torque[i] = stiffness[i] * (target[i] - q[i]) - damping[i] * dq[i];
-            }
-
-            // Clamp joint torques to the limits specified by the model.
-            #[allow(clippy::needless_range_loop)]
-            for i in 0..N {
-                let tau = torque[i];
-                let limit = R::TORQUE_BOUND[i].abs();
-                torque[i] = tau.clamp(-limit, limit);
-            }
-
-            if !torque_mode_initialized {
-                client.set_joint_motor_control_array(
-                    body_id,
-                    &joint_indices[0..N],
-                    ControlModeArray::Velocity(&zero_velocity),
-                    Some(&zero_force),
-                )?;
-                torque_mode_initialized = true;
-            }
-
-            client.set_joint_motor_control_array(
-                body_id,
-                &joint_indices[0..N],
-                ControlModeArray::Torque(&torque),
-                None,
-            )?;
-
-            Ok(is_finished_clone.load(Ordering::SeqCst))
-        })
-        .map_err(|e| RobotException::CommandException(format!("{e}")))?;
-
-        Ok(handle)
-    }
-
-    fn cartesian_impedance_async(
-        &mut self,
-        stiffness: (f64, f64),
-        damping: (f64, f64),
-    ) -> RobotResult<CartesianImpedanceHandle> {
-        let handle = CartesianImpedanceHandle {
-            stiffness: Arc::new(Mutex::new(stiffness)),
-            damping: Arc::new(Mutex::new(damping)),
-            target: Arc::new(Mutex::new(None)),
-            is_finished: Arc::new(AtomicBool::new(false)),
-        };
-
-        let stiffness_clone = handle.stiffness.clone();
-        let damping_clone = handle.damping.clone();
-        let target_clone = handle.target.clone();
-        let is_finished_clone = handle.is_finished.clone();
-
-        let body_id = self.body_id;
-        let joint_indices = self.joint_indices.clone();
-        let end_effector_link = self.end_effector_link;
-        let cache_clone = self.state_cache.clone();
-        let zero_velocity = vec![0.0; N];
-        let zero_force = vec![0.0; N];
-        let mut torque_mode_initialized = false;
-
-        self.enqueue(move |client, _| {
-            let state: ArmState<N> = {
-                let cache = cache_clone.lock().map_err(|_| BulletError::CommandFailed {
-                    message: "state cache poisoned",
-                    code: -1,
-                })?;
-                cache.clone().into()
-            };
-
-            let q = state.joint.meas.q.unwrap_or([0.; N]);
-            let dq = state.joint.meas.dq.unwrap_or([0.; N]);
-            let current_pose = state.flange.meas.pose.unwrap_or_default();
-
-            let target_pose = {
-                let t = target_clone.lock().unwrap();
-                t.unwrap_or(current_pose)
-            };
-            let (trans_stiffness, rot_stiffness) = *stiffness_clone.lock().unwrap();
-            let (trans_damping, rot_damping) = *damping_clone.lock().unwrap();
-
-            // Compute Jacobian via physics engine
-            let zero_acc = vec![0.0; N];
-            let jacobian = client.calculate_jacobian(
-                body_id,
-                end_effector_link,
-                [0.0, 0.0, 0.0],
-                &q,
-                &dq,
-                &zero_acc,
-            )?;
-
-            // Cartesian position/orientation error
-            let current_quat = current_pose.quat();
-            let target_quat = target_pose.quat();
-
-            let pos_error = target_quat.translation.vector - current_quat.translation.vector;
-            let rot_error = {
-                let q_cur = current_quat.rotation;
-                let q_des = target_quat.rotation;
-                let q_err = q_des * q_cur.inverse();
-                q_err.scaled_axis()
-            };
-
-            // Cartesian force: F = K_t * position_error - D_t * J * dq (translational)
-            // Cartesian torque: tau_c = K_r * rotation_error - D_r * J_r * dq (rotational)
-            let j_lin = &jacobian.linear; // 3xN
-            let j_ang = &jacobian.angular; // 3xN
-            let dq_vec = nalgebra::DVector::from_column_slice(&dq);
-            let lin_vel = j_lin * &dq_vec; // 3x1
-            let ang_vel = j_ang * &dq_vec; // 3x1
-
-            let mut force = nalgebra::Vector3::zeros();
-            let mut torque_cart = nalgebra::Vector3::zeros();
-            for i in 0..3 {
-                force[i] = trans_stiffness * pos_error[i] - trans_damping * lin_vel[i];
-                torque_cart[i] = rot_stiffness * rot_error[i] - rot_damping * ang_vel[i];
-            }
-
-            // Map the wrench to joint torques: tau = J_lin^T * F + J_ang^T * tau_c
-            let tau = j_lin.transpose() * force + j_ang.transpose() * torque_cart;
-
-            let mut torque = [0.0; N];
-            for i in 0..N.min(tau.len()) {
-                torque[i] = tau[i];
-            }
-
-            // Clamp joint torques to the limits specified by the model.
-            #[allow(clippy::needless_range_loop)]
-            for i in 0..N {
-                let tau = torque[i];
-                let limit = R::TORQUE_BOUND[i].abs();
-                torque[i] = tau.clamp(-limit, limit);
-            }
-
-            if !torque_mode_initialized {
-                client.set_joint_motor_control_array(
-                    body_id,
-                    &joint_indices[0..N],
-                    ControlModeArray::Velocity(&zero_velocity),
-                    Some(&zero_force),
-                )?;
-                torque_mode_initialized = true;
-            }
-
-            client.set_joint_motor_control_array(
-                body_id,
-                &joint_indices[0..N],
-                ControlModeArray::Torque(&torque),
-                None,
-            )?;
-
-            Ok(is_finished_clone.load(Ordering::SeqCst))
-        })
-        .map_err(|e| RobotException::CommandException(format!("{e}")))?;
-
-        Ok(handle)
-    }
-
-    fn joint_impedance_control(
-        &mut self,
-        stiffness: &[f64; N],
-        damping: &[f64; N],
-    ) -> RobotResult<(
-        JointImpedanceHandle<N>,
-        impl FnMut() -> BoxFuture<'static, RobotResult<()>>,
-    )> {
-        let handle = self.joint_impedance_async(stiffness, damping)?;
-        let is_finished = handle.is_finished.clone();
-
-        let closure = Box::new(move || {
-            let is_finished = is_finished.clone();
-            Box::pin(async move {
-                while !is_finished.load(Ordering::SeqCst) {
-                    tokio::time::sleep(Duration::from_millis(10)).await;
-                }
-                Ok(())
-            }) as BoxFuture<'static, RobotResult<()>>
-        });
-
-        Ok((handle, closure))
-    }
-
-    fn cartesian_impedance_control(
-        &mut self,
-        stiffness: (f64, f64),
-        damping: (f64, f64),
-    ) -> RobotResult<(
-        CartesianImpedanceHandle,
-        impl FnMut() -> BoxFuture<'static, RobotResult<()>>,
-    )> {
-        let handle = self.cartesian_impedance_async(stiffness, damping)?;
-        let is_finished = handle.is_finished.clone();
-
-        let closure = Box::new(move || {
-            let is_finished = is_finished.clone();
-            Box::pin(async move {
-                while !is_finished.load(Ordering::SeqCst) {
-                    tokio::time::sleep(Duration::from_millis(10)).await;
-                }
-                Ok(())
-            }) as BoxFuture<'static, RobotResult<()>>
-        });
-
-        Ok((handle, closure))
-    }
-}
-*/
