@@ -12,7 +12,7 @@ use std::{
 };
 
 use nalgebra as na;
-use robot_behavior::utils::*;
+use roplat_behavior::utils::*;
 use rsbullet_sys as ffi;
 
 use crate::error::{BulletError, BulletResult};
