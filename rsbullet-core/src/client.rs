@@ -23,6 +23,175 @@ use crate::types::*;
 pub const B3_MAX_NUM_END_EFFECTORS: usize = 128;
 pub const MAX_PHYSICS_CLIENTS: usize = 1024;
 
+fn invalid_argument(message: &'static str) -> BulletError {
+    BulletError::CommandFailed { message, code: -1 }
+}
+
+fn require_positive_time_step(dt: Duration) -> BulletResult<()> {
+    if dt.is_zero() {
+        return Err(invalid_argument(
+            "Simulation time step must be greater than zero",
+        ));
+    }
+    Ok(())
+}
+
+fn require_finite(values: &[f64], message: &'static str) -> BulletResult<()> {
+    if values.iter().any(|value| !value.is_finite()) {
+        return Err(invalid_argument(message));
+    }
+    Ok(())
+}
+
+fn require_nonnegative(values: &[f64], message: &'static str) -> BulletResult<()> {
+    if values
+        .iter()
+        .any(|value| !value.is_finite() || *value < 0.0)
+    {
+        return Err(invalid_argument(message));
+    }
+    Ok(())
+}
+
+fn validate_scalar_motor_joint(info: &JointInfo, position_based: bool) -> BulletResult<()> {
+    if !matches!(info.joint_type, JointType::Revolute | JointType::Prismatic)
+        || info.u_index < 0
+        || (position_based && info.q_index < 0)
+    {
+        return Err(invalid_argument(
+            "Scalar motor control requires a revolute or prismatic joint",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_ik_nullspace(arrays: [Option<&[f64]>; 4], dof: usize) -> BulletResult<bool> {
+    if arrays.iter().all(Option::is_none) {
+        return Ok(false);
+    }
+    for values in arrays {
+        let values = values.ok_or_else(|| invalid_argument(
+            "IK nullspace requires lower limits, upper limits, joint ranges and rest poses together",
+        ))?;
+        if values.len() != dof {
+            return Err(invalid_argument(
+                "IK nullspace arrays must match degrees of freedom",
+            ));
+        }
+        require_finite(values, "IK nullspace values must be finite")?;
+    }
+    Ok(true)
+}
+
+fn validate_motor_control(mode: ControlMode, maximum_force: Option<f64>) -> BulletResult<()> {
+    if let Some(force) = maximum_force {
+        require_nonnegative(
+            &[force],
+            "Maximum motor force must be finite and nonnegative",
+        )?;
+    }
+    match mode {
+        ControlMode::Position(value)
+        | ControlMode::Velocity(value)
+        | ControlMode::Torque(value) => require_finite(&[value], "Motor target must be finite"),
+        ControlMode::Pd {
+            target_position,
+            target_velocity,
+            position_gain,
+            velocity_gain,
+            maximum_velocity,
+        }
+        | ControlMode::StablePd {
+            target_position,
+            target_velocity,
+            position_gain,
+            velocity_gain,
+            maximum_velocity,
+        } => {
+            require_finite(
+                &[target_position, target_velocity],
+                "Motor targets must be finite",
+            )?;
+            require_nonnegative(
+                &[position_gain, velocity_gain],
+                "Motor gains must be finite and nonnegative",
+            )?;
+            if let Some(velocity) = maximum_velocity {
+                require_nonnegative(
+                    &[velocity],
+                    "Maximum motor velocity must be finite and nonnegative",
+                )?;
+            }
+            Ok(())
+        }
+    }
+}
+
+fn validate_motor_control_array(
+    mode: ControlModeArray<'_>,
+    forces: Option<&[f64]>,
+    count: usize,
+) -> BulletResult<()> {
+    let check_len = |values: &[f64]| -> BulletResult<()> {
+        if values.len() != count {
+            return Err(invalid_argument(
+                "Motor parameter length must match joint count",
+            ));
+        }
+        Ok(())
+    };
+    if let Some(forces) = forces {
+        check_len(forces)?;
+        require_nonnegative(
+            forces,
+            "Maximum motor forces must be finite and nonnegative",
+        )?;
+    }
+    match mode {
+        ControlModeArray::Position(values)
+        | ControlModeArray::Velocity(values)
+        | ControlModeArray::Torque(values) => {
+            check_len(values)?;
+            require_finite(values, "Motor targets must be finite")
+        }
+        ControlModeArray::Pd {
+            target_position,
+            target_velocity,
+            position_gain,
+            velocity_gain,
+            maximum_velocity,
+        }
+        | ControlModeArray::StablePd {
+            target_position,
+            target_velocity,
+            position_gain,
+            velocity_gain,
+            maximum_velocity,
+        } => {
+            for values in [
+                target_position,
+                target_velocity,
+                position_gain,
+                velocity_gain,
+            ] {
+                check_len(values)?;
+            }
+            require_finite(target_position, "Motor positions must be finite")?;
+            require_finite(target_velocity, "Motor velocities must be finite")?;
+            require_nonnegative(position_gain, "Motor gains must be finite and nonnegative")?;
+            require_nonnegative(velocity_gain, "Motor gains must be finite and nonnegative")?;
+            if let Some(velocities) = maximum_velocity {
+                check_len(velocities)?;
+                require_nonnegative(
+                    velocities,
+                    "Maximum motor velocities must be finite and nonnegative",
+                )?;
+            }
+            Ok(())
+        }
+    }
+}
+
 pub struct PhysicsClient {
     handle: ffi::b3PhysicsClientHandle,
     mode: Mode,
@@ -90,13 +259,29 @@ impl PhysicsClient {
     /// - connect(method, `key=SHARED_MEMORY_KEY`, options='')
     /// - connect(method, hostname='localhost', port=1234, options='')  
     pub fn connect(mode: Mode) -> BulletResult<Self> {
+        #[cfg(not(feature = "gui"))]
+        if matches!(
+            mode,
+            Mode::Gui
+                | Mode::GuiMainThread
+                | Mode::GuiServer
+                | Mode::GraphicsServerMainThread { .. }
+                | Mode::GraphicsServer { .. }
+                | Mode::SharedMemoryServer
+                | Mode::SharedMemoryGui
+                | Mode::GraphicsClient
+        ) {
+            return Err(BulletError::ServerUnavailable(
+                "GUI support requires the gui feature",
+            ));
+        }
         // Allow only a single GUI instance per process
 
         let mut reserved_gui = false;
-        if let Mode::Gui | Mode::GuiServer = mode {
+        if let Mode::Gui | Mode::GuiServer | Mode::GuiMainThread = mode {
             // Atomically reserve if free; otherwise fail
             if GUI_GUARD
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |v| {
+                .try_update(Ordering::SeqCst, Ordering::SeqCst, |v| {
                     if v == 0 { Some(1) } else { None }
                 })
                 .is_ok()
@@ -111,6 +296,7 @@ impl PhysicsClient {
 
         let handle = match mode {
             Mode::Direct => unsafe { ffi::b3ConnectPhysicsDirect() },
+            #[cfg(feature = "gui")]
             Mode::Gui => {
                 if cfg!(target_os = "macos") {
                     unsafe {
@@ -128,12 +314,14 @@ impl PhysicsClient {
                     }
                 }
             }
+            #[cfg(feature = "gui")]
             Mode::GuiMainThread => unsafe {
                 ffi::b3CreateInProcessPhysicsServerAndConnectMainThreadSharedMemory(
                     0,
                     ptr::null_mut(),
                 )
             },
+            #[cfg(feature = "gui")]
             Mode::GuiServer => {
                 if cfg!(target_os = "macos") {
                     unsafe {
@@ -175,11 +363,13 @@ impl PhysicsClient {
                     ));
                 }
             }
+            #[cfg(feature = "gui")]
             Mode::GraphicsServerMainThread { port } => unsafe {
                 ffi::b3CreateInProcessGraphicsServerAndConnectMainThreadSharedMemory(
                     port.unwrap_or(6667) as i32,
                 )
             },
+            #[cfg(feature = "gui")]
             Mode::GraphicsServer { port } => {
                 if cfg!(target_os = "macos") {
                     unsafe {
@@ -208,12 +398,14 @@ impl PhysicsClient {
                 }
             }
             Mode::SharedMemory => unsafe { ffi::b3ConnectSharedMemory(ffi::SHARED_MEMORY_KEY) },
+            #[cfg(feature = "gui")]
             Mode::SharedMemoryServer => unsafe {
                 ffi::b3CreateInProcessPhysicsServerFromExistingExampleBrowserAndConnect3(
                     ptr::null_mut(),
                     ffi::SHARED_MEMORY_KEY,
                 )
             },
+            #[cfg(feature = "gui")]
             Mode::SharedMemoryGui | Mode::GraphicsClient => unsafe {
                 ffi::b3CreateInProcessPhysicsServerFromExistingExampleBrowserAndConnect4(
                     ptr::null_mut(),
@@ -221,6 +413,19 @@ impl PhysicsClient {
                 )
             },
 
+            #[cfg(not(feature = "gui"))]
+            Mode::Gui
+            | Mode::GuiMainThread
+            | Mode::GuiServer
+            | Mode::GraphicsServerMainThread { .. }
+            | Mode::GraphicsServer { .. }
+            | Mode::SharedMemoryServer
+            | Mode::SharedMemoryGui
+            | Mode::GraphicsClient => {
+                return Err(BulletError::ServerUnavailable(
+                    "GUI support requires the gui feature",
+                ));
+            }
             #[cfg(feature = "dart")]
             Mode::Dart => unsafe { ffi::b3ConnectPhysicsDART() },
             #[cfg(feature = "physx")]
@@ -233,10 +438,19 @@ impl PhysicsClient {
                 unsafe { ffi::b3ConnectPhysicsGRPC(host_name.as_ptr(), port.unwrap_or(-1)) }
             }
         }
-        .ok_or(BulletError::NullPointer(
-            "Bullet returned a null physics client handle",
-        ))?;
+        .ok_or_else(|| {
+            if reserved_gui {
+                GUI_GUARD.store(0, Ordering::SeqCst);
+            }
+            BulletError::NullPointer("Bullet returned a null physics client handle")
+        })?;
 
+        // Count the owned handle before fallible synchronization: if setup fails,
+        // Drop must release this handle without subtracting another live client.
+        TOTAL_CLIENTS.fetch_add(1, Ordering::SeqCst);
+        if reserved_gui {
+            GUI_CLIENTS.fetch_add(1, Ordering::SeqCst);
+        }
         let mut client = PhysicsClient { handle, mode };
         client.ensure_can_submit()?;
 
@@ -252,12 +466,6 @@ impl PhysicsClient {
                 command,
                 ffi::EnumSharedMemoryServerStatus::CMD_SYNC_USER_DATA_COMPLETED,
             )?;
-        }
-
-        // Successful connect: update counters
-        TOTAL_CLIENTS.fetch_add(1, Ordering::SeqCst);
-        if reserved_gui {
-            GUI_CLIENTS.fetch_add(1, Ordering::SeqCst);
         }
 
         Ok(client)
@@ -307,8 +515,10 @@ impl PhysicsClient {
         self.ensure_can_submit()?;
         let command = unsafe { ffi::b3InitResetSimulationCommand(self.handle) };
         unsafe { ffi::b3InitResetSimulationSetFlags(command, 0) };
-        let _status_handle =
-            unsafe { ffi::b3SubmitClientCommandAndWaitStatus(self.handle, command) };
+        self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_RESET_SIMULATION_COMPLETED,
+        )?;
         Ok(())
     }
 
@@ -340,8 +550,9 @@ impl PhysicsClient {
     /// * `gravity` - a gravity vector. Can be a \[f64;3\]-array or anything else that can be
     ///   converted into [f64; 3].
     pub fn set_gravity(&mut self, grav: impl Into<[f64; 3]>) -> BulletResult<&mut Self> {
-        self.ensure_can_submit()?;
         let grav = grav.into();
+        require_finite(&grav, "Gravity must contain only finite values")?;
+        self.ensure_can_submit()?;
         let command = unsafe { ffi::b3InitPhysicsParamCommand(self.handle) };
         unsafe {
             ffi::b3PhysicsParamSetGravity(command, grav[0], grav[1], grav[2]);
@@ -364,6 +575,7 @@ impl PhysicsClient {
     /// It is best to only call this method at the start of a simulation.
     /// Don't change this time step regularly.
     pub fn set_time_step(&mut self, time_step: Duration) -> BulletResult<&mut Self> {
+        require_positive_time_step(time_step)?;
         self.ensure_can_submit()?;
         let command = unsafe { ffi::b3InitPhysicsParamCommand(self.handle) };
         unsafe {
@@ -427,6 +639,9 @@ impl PhysicsClient {
         &mut self,
         update: &PhysicsEngineParametersUpdate,
     ) -> BulletResult<&mut Self> {
+        if let Some(dt) = update.fixed_time_step {
+            require_positive_time_step(dt)?;
+        }
         self.ensure_can_submit()?;
         let command = unsafe { ffi::b3InitPhysicsParamCommand(self.handle) };
         Self::apply_physics_engine_update(command, update);
@@ -1558,7 +1773,10 @@ impl PhysicsClient {
         let link_index = link_index.unwrap_or(-1);
         let visual_shape_index = visual_shape_index.unwrap_or(-1);
         let value_len = i32::try_from(value_c.as_bytes_with_nul().len()).map_err(|_| {
-            BulletError::CommandFailed { message: "User data value is too long", code: -1 }
+            BulletError::CommandFailed {
+                message: "User data value is too long",
+                code: -1,
+            }
         })?;
 
         let command = unsafe {
@@ -1725,7 +1943,10 @@ impl PhysicsClient {
             });
         }
 
-        Ok(Aabb { min: aabb_min, max: aabb_max })
+        Ok(Aabb {
+            min: aabb_min,
+            max: aabb_max,
+        })
     }
 
     pub fn reset_base_position_and_orientation(
@@ -1804,7 +2025,10 @@ impl PhysicsClient {
         let raw = unsafe { raw.assume_init() };
         let base_name = Self::read_c_string(&raw.m_baseName);
         let body_name = Self::read_c_string(&raw.m_bodyName);
-        Ok(BodyInfo { base_name, body_name })
+        Ok(BodyInfo {
+            base_name,
+            body_name,
+        })
     }
 
     pub fn get_num_joints(&self, body_unique_id: i32) -> i32 {
@@ -1895,12 +2119,17 @@ impl PhysicsClient {
         compute_forward_kinematics: bool,
         compute_link_velocity: bool,
     ) -> BulletResult<LinkState> {
+        if link_index < 0 || link_index >= self.get_num_joints(body_unique_id) {
+            return Err(invalid_argument(
+                "Link index is outside this body's links; query the base separately",
+            ));
+        }
         let status = self.request_actual_state_status_with_flags(
             body_unique_id,
             compute_link_velocity,
             compute_forward_kinematics,
         )?;
-        self.read_link_state(status.handle, link_index)
+        self.read_link_state(status.handle, link_index, compute_link_velocity)
     }
 
     pub fn get_link_states(
@@ -1913,6 +2142,15 @@ impl PhysicsClient {
         if link_indices.is_empty() {
             return Ok(Vec::new());
         }
+        let count = self.get_num_joints(body_unique_id);
+        if link_indices
+            .iter()
+            .any(|index| *index < 0 || *index >= count)
+        {
+            return Err(invalid_argument(
+                "Link index is outside this body's links; query the base separately",
+            ));
+        }
         let status = self.request_actual_state_status_with_flags(
             body_unique_id,
             compute_link_velocity,
@@ -1920,7 +2158,7 @@ impl PhysicsClient {
         )?;
         link_indices
             .iter()
-            .map(|&index| self.read_link_state(status.handle, index))
+            .map(|&index| self.read_link_state(status.handle, index, compute_link_velocity))
             .collect()
     }
 
@@ -1961,7 +2199,11 @@ impl PhysicsClient {
         positions: Option<&[f64]>,
         velocities: Option<&[f64]>,
     ) -> BulletResult<()> {
-        let target = MultiDofTarget { joint_index, positions, velocities };
+        let target = MultiDofTarget {
+            joint_index,
+            positions,
+            velocities,
+        };
         self.reset_joint_states_multi_dof(body_unique_id, slice::from_ref(&target))
     }
 
@@ -2288,8 +2530,10 @@ impl PhysicsClient {
         control_mode: ControlMode,
         maximum_force: Option<f64>,
     ) -> BulletResult<()> {
+        validate_motor_control(control_mode, maximum_force)?;
         self.ensure_can_submit()?;
         let info = self.get_joint_info(body_unique_id, joint_index)?;
+        validate_scalar_motor_joint(&info, control_mode.is_position_based())?;
         let command = unsafe {
             ffi::b3JointControlCommandInit2(self.handle, body_unique_id, control_mode.as_raw())
         };
@@ -2355,7 +2599,7 @@ impl PhysicsClient {
         }
         self.submit_simple_command(
             command,
-            ffi::EnumSharedMemoryServerStatus::CMD_CLIENT_COMMAND_COMPLETED,
+            ffi::EnumSharedMemoryServerStatus::CMD_DESIRED_STATE_RECEIVED_COMPLETED,
         )?;
         Ok(())
     }
@@ -2372,10 +2616,25 @@ impl PhysicsClient {
         const DEFAULT_KD: f64 = 1.0;
         const DEFAULT_TARGET_VELOCITY: f64 = 0.0;
 
+        validate_motor_control_array(control_mode, maximum_force, joint_index.len())?;
         if joint_index.is_empty() {
             return Ok(());
         }
         self.ensure_can_submit()?;
+        // Resolve every joint before creating/submitting a command: reject fixed or
+        // multi-DOF joints without passing negative/incorrect indices through FFI.
+        let position_based = matches!(
+            control_mode,
+            ControlModeArray::Position(_)
+                | ControlModeArray::Pd { .. }
+                | ControlModeArray::StablePd { .. }
+        );
+        for &joint in joint_index {
+            validate_scalar_motor_joint(
+                &self.get_joint_info(body_unique_id, joint)?,
+                position_based,
+            )?;
+        }
         let command = unsafe {
             ffi::b3JointControlCommandInit2(self.handle, body_unique_id, control_mode.as_raw())
         };
@@ -2530,10 +2789,16 @@ impl PhysicsClient {
             }
         }
 
-        self.submit_command(command)?;
+        self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_DESIRED_STATE_RECEIVED_COMPLETED,
+        )?;
         Ok(())
     }
 
+    /// Submit native multi-DOF control. Velocity-only mode supports revolute and
+    /// prismatic joints; Bullet ignores that mode for spherical joints, so it is
+    /// rejected here. Spherical position and torque control use their own modes.
     pub fn set_joint_motor_control_multi_dof(
         &mut self,
         body_unique_id: i32,
@@ -2550,11 +2815,13 @@ impl PhysicsClient {
 
         self.submit_simple_command(
             command,
-            ffi::EnumSharedMemoryServerStatus::CMD_CLIENT_COMMAND_COMPLETED,
+            ffi::EnumSharedMemoryServerStatus::CMD_DESIRED_STATE_RECEIVED_COMPLETED,
         )?;
         Ok(())
     }
 
+    /// Submit one native command for joints sharing a control mode. The same
+    /// spherical velocity restriction as `set_joint_motor_control_multi_dof` applies.
     pub fn set_joint_motor_control_multi_dof_array(
         &mut self,
         body_unique_id: i32,
@@ -2588,7 +2855,7 @@ impl PhysicsClient {
 
         self.submit_simple_command(
             command,
-            ffi::EnumSharedMemoryServerStatus::CMD_CLIENT_COMMAND_COMPLETED,
+            ffi::EnumSharedMemoryServerStatus::CMD_DESIRED_STATE_RECEIVED_COMPLETED,
         )?;
         Ok(())
     }
@@ -2773,7 +3040,10 @@ impl PhysicsClient {
             }
         }
 
-        Ok(Jacobian { linear: linear_matrix, angular: angular_matrix })
+        Ok(Jacobian {
+            linear: linear_matrix,
+            angular: angular_matrix,
+        })
     }
 
     pub fn calculate_mass_matrix(
@@ -2822,13 +3092,18 @@ impl PhysicsClient {
         }
         let matrix_size = out_dof as usize;
         if matrix_size == 0 {
-            return Ok(MassMatrix { matrix: na::DMatrix::zeros(0, 0) });
+            return Ok(MassMatrix {
+                matrix: na::DMatrix::zeros(0, 0),
+            });
         }
         raw.truncate(matrix_size * matrix_size);
         let matrix = na::DMatrix::from_column_slice(matrix_size, matrix_size, &raw);
         Ok(MassMatrix { matrix })
     }
 
+    /// Solve for an end-effector pose expressed in world coordinates.
+    /// The target frame remains world coordinates even when `current_positions`
+    /// supplies a seed; Bullet's seeded C API internally expects base-COM coordinates.
     pub fn calculate_inverse_kinematics(
         &mut self,
         body_unique_id: i32,
@@ -2837,6 +3112,13 @@ impl PhysicsClient {
         options: &InverseKinematicsOptions<'_>,
     ) -> BulletResult<Vec<f64>> {
         self.ensure_can_submit()?;
+        if end_effector_link_index < 0
+            || end_effector_link_index >= self.get_num_joints(body_unique_id)
+        {
+            return Err(invalid_argument(
+                "IK end-effector index is outside this body's links",
+            ));
+        }
         let dof = unsafe { ffi::b3ComputeDofCount(self.handle, body_unique_id) };
         if dof <= 0 {
             return Err(BulletError::CommandFailed {
@@ -2845,7 +3127,29 @@ impl PhysicsClient {
             });
         }
         let dof_usize = dof as usize;
-        let (tran, rot) = isometry_to_raw_parts(&target_position.into());
+        if dof_usize > B3_MAX_NUM_END_EFFECTORS {
+            return Err(invalid_argument(
+                "IK degrees of freedom exceed the native command capacity",
+            ));
+        }
+        let has_nullspace = validate_ik_nullspace(
+            [
+                options.lower_limits,
+                options.upper_limits,
+                options.joint_ranges,
+                options.rest_poses,
+            ],
+            dof_usize,
+        )?;
+        let mut target = target_position.into();
+        if options.current_positions.is_some() {
+            // Query before initializing the IK command: Bullet shares one command buffer.
+            target = self
+                .get_base_position_and_orientation(body_unique_id)?
+                .inverse()
+                * target;
+        }
+        let (tran, rot) = isometry_to_raw_parts(&target);
 
         let command =
             unsafe { ffi::b3CalculateInverseKinematicsCommandInit(self.handle, body_unique_id) };
@@ -2881,11 +3185,6 @@ impl PhysicsClient {
                 ffi::b3CalculateInverseKinematicsSetResidualThreshold(command, residual_threshold);
             }
         }
-
-        let has_nullspace = options.lower_limits.map_or(0, <[f64]>::len) == dof_usize
-            && options.upper_limits.map_or(0, <[f64]>::len) == dof_usize
-            && options.joint_ranges.map_or(0, <[f64]>::len) == dof_usize
-            && options.rest_poses.map_or(0, <[f64]>::len) == dof_usize;
 
         unsafe {
             if has_nullspace {
@@ -2952,6 +3251,9 @@ impl PhysicsClient {
         Ok(results)
     }
 
+    /// Solve for world-coordinate target positions, with or without a joint seed.
+    /// Nullspace parameters are supported only for a single target. Multiple
+    /// targets with nullspace parameters are rejected rather than silently lost.
     pub fn calculate_inverse_kinematics2(
         &mut self,
         body_unique_id: i32,
@@ -2971,6 +3273,21 @@ impl PhysicsClient {
                 code: num_targets as i32,
             });
         }
+        if num_targets > B3_MAX_NUM_END_EFFECTORS {
+            return Err(invalid_argument(
+                "IK target count exceeds the native command capacity",
+            ));
+        }
+        let link_count = self.get_num_joints(body_unique_id);
+        if options
+            .end_effector_link_indices
+            .iter()
+            .any(|index| *index < 0 || *index >= link_count)
+        {
+            return Err(invalid_argument(
+                "IK end-effector index is outside this body's links",
+            ));
+        }
 
         let dof = unsafe { ffi::b3ComputeDofCount(self.handle, body_unique_id) };
         if dof <= 0 {
@@ -2980,7 +3297,40 @@ impl PhysicsClient {
             });
         }
         let dof_usize = dof as usize;
+        if dof_usize > B3_MAX_NUM_END_EFFECTORS {
+            return Err(invalid_argument(
+                "IK degrees of freedom exceed the native command capacity",
+            ));
+        }
+        let has_nullspace = validate_ik_nullspace(
+            [
+                options.lower_limits,
+                options.upper_limits,
+                options.joint_ranges,
+                options.rest_poses,
+            ],
+            dof_usize,
+        )?;
+        if num_targets > 1 && has_nullspace {
+            return Err(invalid_argument(
+                "IK nullspace is supported only for a single target",
+            ));
+        }
 
+        let base_inverse = if options.current_positions.is_some() {
+            Some(
+                self.get_base_position_and_orientation(body_unique_id)?
+                    .inverse(),
+            )
+        } else {
+            None
+        };
+        let mut flattened_positions = Vec::with_capacity(num_targets * 3);
+        for pos in options.target_positions {
+            let point = na::Point3::from(*pos);
+            let point = base_inverse.as_ref().map_or(point, |base| base * point);
+            flattened_positions.extend_from_slice(point.coords.as_slice());
+        }
         let command =
             unsafe { ffi::b3CalculateInverseKinematicsCommandInit(self.handle, body_unique_id) };
         if let Some(solver) = options.solver {
@@ -3016,10 +3366,6 @@ impl PhysicsClient {
             }
         }
 
-        let mut flattened_positions = Vec::with_capacity(num_targets * 3);
-        for pos in options.target_positions {
-            flattened_positions.extend_from_slice(pos);
-        }
         let link_indices: Vec<i32> = options.end_effector_link_indices.to_vec();
 
         unsafe {
@@ -3031,18 +3377,13 @@ impl PhysicsClient {
             );
         }
 
-        let has_nullspace = options.lower_limits.map_or(0, <[f64]>::len) == dof_usize
-            && options.upper_limits.map_or(0, <[f64]>::len) == dof_usize
-            && options.joint_ranges.map_or(0, <[f64]>::len) == dof_usize
-            && options.rest_poses.map_or(0, <[f64]>::len) == dof_usize;
-
         unsafe {
             if has_nullspace {
                 ffi::b3CalculateInverseKinematicsPosWithNullSpaceVel(
                     command,
                     dof,
                     link_indices[0],
-                    options.target_positions[0].as_ptr(),
+                    flattened_positions.as_ptr(),
                     options.lower_limits.unwrap().as_ptr(),
                     options.upper_limits.unwrap().as_ptr(),
                     options.joint_ranges.unwrap().as_ptr(),
@@ -3380,6 +3721,15 @@ impl PhysicsClient {
         info: &JointInfo,
         control: &MultiDofControl<'_>,
     ) -> BulletResult<()> {
+        // Bullet's velocity-only branch uses scalar joint motors and otherwise
+        // acknowledges the command without controlling a spherical joint.
+        if control.is_velocity_based()
+            && !matches!(info.joint_type, JointType::Revolute | JointType::Prismatic)
+        {
+            return Err(invalid_argument(
+                "Velocity-only motor control supports revolute or prismatic joints, not spherical joints",
+            ));
+        }
         let q_index = info.q_index;
         let u_index = info.u_index;
         let q_size = info.q_size.max(0) as usize;
@@ -3387,9 +3737,21 @@ impl PhysicsClient {
 
         // 提取通用字段（damping、max_velocity），随后根据模式填充细节。
         let (damping_opt, max_velocity_opt) = match control {
-            MultiDofControl::Position { damping, max_velocity, .. }
-            | MultiDofControl::Pd { damping, max_velocity, .. }
-            | MultiDofControl::StablePd { damping, max_velocity, .. } => (*damping, *max_velocity),
+            MultiDofControl::Position {
+                damping,
+                max_velocity,
+                ..
+            }
+            | MultiDofControl::Pd {
+                damping,
+                max_velocity,
+                ..
+            }
+            | MultiDofControl::StablePd {
+                damping,
+                max_velocity,
+                ..
+            } => (*damping, *max_velocity),
             MultiDofControl::Velocity { damping, .. } | MultiDofControl::Torque { damping, .. } => {
                 (*damping, None)
             }
@@ -3526,9 +3888,12 @@ impl PhysicsClient {
             }
 
             let (target_velocities, velocity_gains, forces) = match control {
-                MultiDofControl::Velocity { target_velocities, velocity_gains, forces, .. } => {
-                    (*target_velocities, *velocity_gains, *forces)
-                }
+                MultiDofControl::Velocity {
+                    target_velocities,
+                    velocity_gains,
+                    forces,
+                    ..
+                } => (*target_velocities, *velocity_gains, *forces),
                 _ => unreachable!(),
             };
 
@@ -3712,7 +4077,13 @@ impl PhysicsClient {
             segmentation_mask.resize(pixel_count, -1);
         }
 
-        Ok(CameraImage { width, height, rgba, depth, segmentation_mask })
+        Ok(CameraImage {
+            width,
+            height,
+            rgba,
+            depth,
+            segmentation_mask,
+        })
     }
 
     fn collect_vr_events(
@@ -3832,9 +4203,10 @@ impl PhysicsClient {
     }
 
     fn path_to_cstring(path: &Path) -> BulletResult<CString> {
-        let utf8 = path
-            .to_str()
-            .ok_or(BulletError::CommandFailed { message: "Path must be valid UTF-8", code: -1 })?;
+        let utf8 = path.to_str().ok_or(BulletError::CommandFailed {
+            message: "Path must be valid UTF-8",
+            code: -1,
+        })?;
         Ok(CString::new(utf8)?)
     }
 }
@@ -4601,19 +4973,29 @@ impl PhysicsClient {
         )?;
 
         let status_code = unsafe { ffi::b3GetStatusPluginCommandResult(status.handle) };
-        let mut raw = ffi::b3UserDataValue { m_type: 0, m_length: 0, m_data1: ptr::null() };
+        let mut raw = ffi::b3UserDataValue {
+            m_type: 0,
+            m_length: 0,
+            m_data1: ptr::null(),
+        };
         let has_data =
             unsafe { ffi::b3GetStatusPluginCommandReturnData(self.handle, &raw mut raw) } != 0;
         let return_data = if has_data && raw.m_length > 0 && !raw.m_data1.is_null() {
             let len = raw.m_length as usize;
             let bytes = unsafe { slice::from_raw_parts(raw.m_data1, len) };
             let data = bytes.iter().map(|&b| b as i32).collect();
-            Some(PluginCommandReturnData { value_type: raw.m_type, data })
+            Some(PluginCommandReturnData {
+                value_type: raw.m_type,
+                data,
+            })
         } else {
             None
         };
 
-        Ok(PluginCommandResult { status: status_code, return_data })
+        Ok(PluginCommandResult {
+            status: status_code,
+            return_data,
+        })
     }
 
     pub fn submit_profile_timing(&mut self, event_name: Option<&str>) -> BulletResult<()> {
@@ -4821,7 +5203,10 @@ impl PhysicsClient {
                 ));
             }
             let status_type = ffi::b3GetStatusType(handle);
-            Ok(CommandStatus { handle, status_type })
+            Ok(CommandStatus {
+                handle,
+                status_type,
+            })
         }
     }
 
@@ -4833,7 +5218,10 @@ impl PhysicsClient {
         let status = self.submit_command(command)?;
         let expected = expected_status as i32;
         if status.status_type != expected {
-            return Err(BulletError::UnexpectedStatus { expected, actual: status.status_type });
+            return Err(BulletError::UnexpectedStatus {
+                expected,
+                actual: status.status_type,
+            });
         }
         Ok(status)
     }
@@ -4927,7 +5315,11 @@ impl PhysicsClient {
                     )
                 }
             }
-            Mesh { vertices, indices, scale } => {
+            Mesh {
+                vertices,
+                indices,
+                scale,
+            } => {
                 if vertices.is_empty() || indices.is_empty() {
                     return Err(BulletError::CommandFailed {
                         message: "Concave mesh requires vertices and indices",
@@ -4950,7 +5342,11 @@ impl PhysicsClient {
                     )
                 }
             }
-            HeightfieldFile { file, mesh_scale, texture_scaling } => {
+            HeightfieldFile {
+                file,
+                mesh_scale,
+                texture_scaling,
+            } => {
                 let file_ptr = scratch.push_c_string(file)?;
                 unsafe {
                     ffi::b3CreateCollisionShapeAddHeightfield(
@@ -5055,7 +5451,13 @@ impl PhysicsClient {
                 let file_ptr = scratch.push_c_string(file)?;
                 unsafe { ffi::b3CreateVisualShapeAddMesh(command, file_ptr, scale.as_ptr()) }
             }
-            MeshData { vertices, indices, normals, uvs, scale } => {
+            MeshData {
+                vertices,
+                indices,
+                normals,
+                uvs,
+                scale,
+            } => {
                 if vertices.is_empty() {
                     return Err(BulletError::CommandFailed {
                         message: "Visual mesh requires vertices",
@@ -5244,8 +5646,11 @@ impl PhysicsClient {
         &mut self,
         status_handle: ffi::b3SharedMemoryStatusHandle,
         link_index: i32,
+        compute_link_velocity: bool,
     ) -> BulletResult<LinkState> {
-        let mut raw = MaybeUninit::<ffi::b3LinkState>::uninit();
+        // Bullet does not populate the historical AABB fields in b3LinkState.
+        // Initialize the complete FFI struct before converting it to Rust.
+        let mut raw = MaybeUninit::<ffi::b3LinkState>::zeroed();
         let success = unsafe {
             ffi::b3GetLinkState(self.handle, status_handle, link_index, raw.as_mut_ptr())
         };
@@ -5255,7 +5660,11 @@ impl PhysicsClient {
                 code: success,
             });
         }
-        unsafe { raw.assume_init() }.try_into()
+        let mut state: LinkState = unsafe { raw.assume_init() }.try_into()?;
+        if !compute_link_velocity {
+            state.world_velocity = None;
+        }
+        Ok(state)
     }
 
     fn extract_base_state(
@@ -5326,13 +5735,13 @@ impl Drop for PhysicsClient {
             ffi::b3DisconnectSharedMemory(self.handle);
         }
         // Decrement totals
-        let _ = TOTAL_CLIENTS.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |v| {
+        let _ = TOTAL_CLIENTS.try_update(Ordering::SeqCst, Ordering::SeqCst, |v| {
             Some(v.saturating_sub(1))
         });
-        if let Mode::Gui | Mode::GuiServer = self.mode {
+        if let Mode::Gui | Mode::GuiServer | Mode::GuiMainThread = self.mode {
             // Release GUI slot
             GUI_GUARD.store(0, Ordering::SeqCst);
-            let _ = GUI_CLIENTS.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |v| {
+            let _ = GUI_CLIENTS.try_update(Ordering::SeqCst, Ordering::SeqCst, |v| {
                 Some(v.saturating_sub(1))
             });
         }

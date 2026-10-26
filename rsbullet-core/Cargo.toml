@@ -23,16 +23,17 @@ exclude = [
 ]
 
 [dependencies]
-rsbullet_sys = { version = "0.3.2", path = "../rsbullet-sys" }
+rsbullet_sys = { version = "0.3.3", path = "../rsbullet-sys", default-features = false }
 nalgebra = { version = "0.34.1" }
 bitflags = "2.9.4"
 roplat_behavior = "0.9.0"
 
 [features]
-default = []
+default = ["gui"]
+gui = ["rsbullet_sys/gui"]
 dart = []
 physx = []
 mujoco = []
 grpc = []
-enet = []
-clsocket = []
+enet = ["rsbullet_sys/enet"]
+clsocket = ["rsbullet_sys/clsocket"]

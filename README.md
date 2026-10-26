@@ -4,13 +4,18 @@ RsBullet brings Bullet physics to Rust: load robot models, create bodies, step a
 
 It builds the native Bullet engine; a Python interpreter or an installed `pybullet` package is not required. This repository continues the [RuBullet](https://github.com/neachdainn/rubullet) project. The original documentation is preserved in [README_ORIGIN.md](README_ORIGIN.md).
 
+For this checkout's finite stepping, native Panda example and optional headless
+build, start with [source build and deployment](docs/source-build.md). The
+registry example below is retained for the older published API; it does not
+install the changes on this branch.
+
 ## Choose the right layer
 
-| Crate | Version | Responsibility |
-| --- | --- | --- |
-| `rsbullet` | `0.4.0` | `RsBullet`, typed robot builders, queued control, and an optional roplat simulation rhythm. Re-exports the core API. |
-| `rsbullet-core` | `0.4.0` | `PhysicsClient`: explicit Bullet commands, body/joint IDs, geometry, model loading, and state queries. |
-| `rsbullet_sys` | `0.3.2` | Builds the bundled Bullet C++ source and exposes its raw C FFI. |
+| Crate | Current source | Registry example below | Responsibility |
+| --- | --- | --- | --- |
+| `rsbullet` | `0.7.0` | `0.4.0` | `RsBullet`, typed robot builders, queued control, and an optional roplat simulation rhythm. Re-exports the core API. |
+| `rsbullet-core` | `0.7.0` | `0.4.0` | `PhysicsClient`: explicit Bullet commands, body/joint IDs, geometry, model loading, and state queries. |
+| `rsbullet_sys` | `0.3.3` | `0.3.2` | Builds the bundled Bullet C++ source and exposes its raw C FFI. |
 
 Most applications should depend on `rsbullet`. The layers keep native build details below the command API, while the higher layer manages robot handles and control callbacks. You can still access `sim.client` when you need a Bullet operation that has no higher-level wrapper.
 
@@ -24,7 +29,7 @@ Use Rust nightly: `roplat_behavior`, a normal dependency, uses unstable Rust fea
 - **Linux:** C/C++ tools, CMake, OpenGL/GLU, and X11 development libraries. On Ubuntu, a starting set is `build-essential cmake libgl1-mesa-dev libglu1-mesa-dev libx11-dev libxi-dev`.
 - **macOS:** Xcode Command Line Tools and CMake; the build links the Cocoa and OpenGL frameworks.
 
-The current native build includes Bullet graphics support even when your program uses `Mode::Direct`. DIRECT avoids opening a simulation window; it does not remove these build dependencies. GUI modes additionally need an available graphical session.
+On the current source branch, the default `gui` feature preserves the graphics-enabled build. For a CPU-only server, use `default-features = false` (or `--no-default-features` for this workspace). That builds Bullet DIRECT, URDF loading, IK, contacts and TinyRenderer without the OpenGL/X11 libraries. `roplat_trajectory` also needs Fontconfig development files on Linux through its plotting dependency. GUI modes require the `gui` feature and an available graphical session. This feature split is not available in the registry `0.4.0` example below; see [source build and deployment](docs/source-build.md).
 
 ## First simulation: a falling sphere, with no model files
 
@@ -44,13 +49,11 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-rsbullet = "0.7.0"
-roplat_behavior = "0.9.0"
+rsbullet = "0.4.0"
+robot_behavior = "0.6.1"
 nalgebra = "0.34"
 anyhow = "1"
 ```
-
-> `roplat_behavior` 0.9 (the renamed `robot_behavior`) and this release are not on crates.io yet; until they are, build from the [drives](https://github.com/Robot-Exp-Platform/drives) workspace. See the [migration notes](https://github.com/Robot-Exp-Platform/roplat_behavior/blob/main/MIGRATION.md).
 
 `src/main.rs`:
 
@@ -58,7 +61,7 @@ anyhow = "1"
 use std::time::Duration;
 
 use nalgebra::Isometry3;
-use roplat_behavior::PhysicsEngine;
+use robot_behavior::PhysicsEngine;
 use rsbullet::{
     CollisionGeometry, CollisionId, CollisionShapeOptions, Mode,
     MultiBodyBase, MultiBodyCreateOptions, RsBullet,
@@ -111,7 +114,7 @@ The program prints a height below the initial `2.0` and exits. It creates its co
 
 ## Loading your own robot
 
-Supply a URDF and every mesh it references. Implement `roplat_behavior::RobotDescription` with `URDF = Some("your_robot.urdf")`, add the model's directory with `sim.add_search_path(...)`, then call `sim.robot_builder::<YourRobot>("robot").base_fixed(true).load()?`. Import the `AddSearchPath`, `AddRobot`, and `EntityBuilder` traits for these methods.
+Supply a URDF and every mesh it references. Implement `robot_behavior::RobotDescription` with `URDF = Some("your_robot.urdf")`, add the model's directory with `sim.add_search_path(...)`, then call `sim.robot_builder::<YourRobot>("robot").base_fixed(true).load()?`. Import the `AddSearchPath`, `AddRobot`, and `EntityBuilder` traits for these methods.
 
 The builder returns `RsBulletRobot<YourRobot>`. Its `body_id`, `joint_indices`, and `joint_names` connect the typed handle to Bullet. The joint list selects revolute and prismatic joints; extra behavior traits on your robot description are needed for the corresponding typed motion APIs. For lower-level model loading or per-joint commands, use `PhysicsClient` directly. Poses use `nalgebra::Isometry3<f64>`; distinguish world/link poses from a joint's relative coordinate when interpreting state.
 
@@ -125,7 +128,7 @@ Point `set_additional_search_path` at that checkout's `examples/pybullet/gym/pyb
 
 ## Optional integration and source builds
 
-The default feature set is empty. Enable `rsbullet = { version = "0.4.0", features = ["roplat"] }` to expose `SimRhythm`; ordinary simulator use does not need roplat. In rsbullet / rsbullet-core 0.6.0 with roplat 0.5.0, `SimRhythm` keeps ownership of its engine and declares `Resources = ()`; the new external borrow channel does not change its step policy. This new trait contract is not part of the registry 0.4.0 example above. Tokio remains a normal dependency because motion futures use its timers. The backend/transport flags such as `dart`, `physx`, `mujoco`, and `grpc` do not by themselves install or validate those external backends.
+Enable the `roplat` feature to expose `SimRhythm`; ordinary simulator use does not need roplat. On the current Git preparation branch (rsbullet / rsbullet-core 0.7.0, roplat 0.5.1; not yet published), the default feature is `gui`. `SimRhythm` is a compatibility alias for `roplat_behavior::roplat::SimulationRhythm<RsBullet>`; the shared scheduler owns its engine and declares `Resources = ()`. Other simulators can use the same scheduler without depending on Bullet. Use `--no-default-features --features roplat` for a headless roplat application. These source contracts are not part of the registry 0.4.0 example above. Tokio is needed by the optional scheduler and development examples; ordinary RsBullet use does not add it. The `enet` and `clsocket` features enable their matching native transports. Backend flags such as `dart`, `physx`, `mujoco`, and `grpc` do not by themselves install or validate those external backends; in particular, `mujoco` is not a maintained standalone MuJoCo integration.
 
 For a source checkout, initialize the native source before building:
 
@@ -135,12 +138,15 @@ cd rsbullet
 git submodule update --init --recursive rsbullet-sys/bullet3
 ```
 
-Repository manifests use the same crates.io dependencies as the released packages, so a source build needs only the Bullet submodule above. Prefer the registry dependency above for a first application.
+The current source uses sibling roplat and roplat_behavior workspaces via explicit Cargo patches. These new package versions are not published; follow [source build and deployment](docs/source-build.md) and retain the exact checkout revisions and lockfile. The registry example above selects the older released API.
+
+For this branch's finite simulation and headless support, follow [source build and deployment](docs/source-build.md), including the native submodule and exact dependency revisions. A GitHub source ZIP does not include the Bullet submodule. The [headless Dockerfile](docker/Dockerfile.headless) contains a build environment, not the robot models or private dependency credentials.
 
 ## Next steps
 
 - [Public Rust API source](rsbullet/src/lib.rs) and [core API source](rsbullet-core/src/lib.rs). These entry points are available while the 0.4.0 docs.rs builds are unavailable.
 - [API inventory](RSBULLET_API_REFERENCE.md) for the command surface; check current signatures when adapting older PyBullet/RuBullet examples.
+- [Native Panda pick and place](docs/pick-place.md) for a complete headless roplat task with physical grasp, state evidence and camera output.
 - [Examples](rsbullet/examples) for constraints, dynamics, and rendering. Many open a GUI or need external assets.
 - [Robot builders and queued control](rsbullet/src/rsbullet_robot.rs), [simulation stepping](rsbullet/src/rsbullet.rs), and [SimRhythm](rsbullet/src/sim_rhythm.rs).
 - [roplat_rerun](https://github.com/Robot-Exp-Platform/roplat_rerun) for visualizing simulation state in Rerun.

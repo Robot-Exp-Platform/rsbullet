@@ -2,3 +2,9 @@
 members = ["rsbullet", "rsbullet-core", "rsbullet-sys"]
 
 resolver = "3"
+
+[patch.crates-io]
+roplat = { path = "../roplat/roplat" }
+roplat_msgs = { path = "../roplat/roplat_msgs" }
+roplat_behavior = { path = "../roplat_behavior/roplat_behavior" }
+roplat_trajectory = { path = "../roplat_behavior/roplat_trajectory" }

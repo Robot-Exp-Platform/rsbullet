@@ -288,13 +288,19 @@ impl From<[f64; 3]> for UrdfOptions {
 
 impl From<na::Isometry3<f64>> for UrdfOptions {
     fn from(base: na::Isometry3<f64>) -> Self {
-        Self { base: Some(base), ..Self::default() }
+        Self {
+            base: Some(base),
+            ..Self::default()
+        }
     }
 }
 
 impl From<LoadModelFlags> for UrdfOptions {
     fn from(flags: LoadModelFlags) -> Self {
-        UrdfOptions { flags: Some(flags), ..Default::default() }
+        UrdfOptions {
+            flags: Some(flags),
+            ..Default::default()
+        }
     }
 }
 
@@ -306,7 +312,10 @@ pub struct SdfOptions {
 
 impl From<(Option<bool>, Option<f64>)> for SdfOptions {
     fn from(value: (Option<bool>, Option<f64>)) -> Self {
-        Self { use_maximal_coordinates: value.0, global_scaling: value.1 }
+        Self {
+            use_maximal_coordinates: value.0,
+            global_scaling: value.1,
+        }
     }
 }
 
@@ -318,7 +327,10 @@ pub struct MjcfOptions {
 
 impl From<LoadModelFlags> for Option<MjcfOptions> {
     fn from(flags: LoadModelFlags) -> Self {
-        Some(MjcfOptions { flags: Some(flags), use_multi_body: None })
+        Some(MjcfOptions {
+            flags: Some(flags),
+            use_multi_body: None,
+        })
     }
 }
 
@@ -477,7 +489,15 @@ impl<'a> From<Entity<'a>> for CollisionGeometry<'a> {
             Entity::Plane { normal, constant } => Self::Plane { normal, constant },
             Entity::MeshFile { file, scale } => Self::MeshFile { file, scale },
             Entity::ConvexMesh { vertices, scale } => Self::ConvexMesh { vertices, scale },
-            Entity::Mesh { vertices, indices, scale } => Self::Mesh { vertices, indices, scale },
+            Entity::Mesh {
+                vertices,
+                indices,
+                scale,
+            } => Self::Mesh {
+                vertices,
+                indices,
+                scale,
+            },
         }
     }
 }
@@ -490,13 +510,19 @@ pub struct CollisionShapeOptions {
 
 impl Default for CollisionShapeOptions {
     fn default() -> Self {
-        Self { transform: na::Isometry3::identity(), flags: None }
+        Self {
+            transform: na::Isometry3::identity(),
+            flags: None,
+        }
     }
 }
 
 impl From<na::Isometry3<f64>> for CollisionShapeOptions {
     fn from(transform: na::Isometry3<f64>) -> Self {
-        Self { transform, flags: None }
+        Self {
+            transform,
+            flags: None,
+        }
     }
 }
 
@@ -505,7 +531,10 @@ where
     T: Into<na::Isometry3<f64>>,
 {
     fn from(value: (T, Option<i32>)) -> Self {
-        Self { transform: value.0.into(), flags: value.1 }
+        Self {
+            transform: value.0.into(),
+            flags: value.1,
+        }
     }
 }
 
@@ -561,16 +590,24 @@ impl<'a> From<Entity<'a>> for VisualGeometry<'a> {
             Entity::Cylinder { radius, height } => Self::Cylinder { radius, height },
             Entity::Plane { normal, constant } => Self::Plane { normal, constant },
             Entity::MeshFile { file, scale } => Self::Mesh { file, scale },
-            Entity::Mesh { vertices, indices, scale } => Self::MeshData {
+            Entity::Mesh {
+                vertices,
+                indices,
+                scale,
+            } => Self::MeshData {
                 vertices,
                 indices: Some(indices),
                 normals: None,
                 uvs: None,
                 scale,
             },
-            Entity::ConvexMesh { vertices, scale } => {
-                Self::MeshData { vertices, indices: None, normals: None, uvs: None, scale }
-            }
+            Entity::ConvexMesh { vertices, scale } => Self::MeshData {
+                vertices,
+                indices: None,
+                normals: None,
+                uvs: None,
+                scale,
+            },
         }
     }
 }
@@ -605,7 +642,10 @@ impl Default for VisualShapeOptions {
 
 impl From<na::Isometry3<f64>> for VisualShapeOptions {
     fn from(transform: na::Isometry3<f64>) -> Self {
-        Self { transform, ..Default::default() }
+        Self {
+            transform,
+            ..Default::default()
+        }
     }
 }
 
@@ -830,7 +870,7 @@ impl TryFrom<b3JointInfo> for JointInfo {
     fn try_from(info: b3JointInfo) -> Result<Self, Self::Error> {
         Ok(Self {
             joint_index: info.m_joint_index,
-            joint_name: PhysicsClient::read_c_string(&info.m_link_name),
+            joint_name: PhysicsClient::read_c_string(&info.m_joint_name),
             joint_type: info.m_joint_type.try_into().unwrap_or(JointType::Fixed),
             q_index: info.m_q_index,
             u_index: info.m_u_index,
@@ -886,10 +926,15 @@ pub struct Aabb {
 
 #[derive(Debug, Clone)]
 pub struct LinkState {
+    /// World pose of the link's inertial center of mass.
     pub world: na::Isometry3<f64>,
     pub local_inertial: na::Isometry3<f64>,
+    /// World pose of the URDF link frame, distinct from its center of mass.
     pub world_link_frame: na::Isometry3<f64>,
+    /// World-frame COM linear velocity followed by angular velocity; `None`
+    /// when velocity computation was not requested, including for moving links.
     pub world_velocity: Option<[f64; 6]>,
+    /// Not supplied by Bullet's link-state API; use `get_aabb` separately.
     pub world_aabb: Option<Aabb>,
 }
 
@@ -910,27 +955,17 @@ impl TryFrom<b3LinkState> for LinkState {
                 na::Translation3::from(value.m_world_link_frame_position),
                 na::UnitQuaternion::from_quaternion(value.m_world_link_frame_orientation.into()),
             ),
-            world_velocity: if value.m_world_linear_velocity != [0.0; 3]
-                || value.m_world_angular_velocity != [0.0; 3]
-            {
-                Some([
-                    value.m_world_linear_velocity[0],
-                    value.m_world_linear_velocity[1],
-                    value.m_world_linear_velocity[2],
-                    value.m_world_angular_velocity[0],
-                    value.m_world_angular_velocity[1],
-                    value.m_world_angular_velocity[2],
-                ])
-            } else {
-                None
-            },
-            world_aabb: if value.m_world_linear_velocity != [0.0; 3]
-                || value.m_world_angular_velocity != [0.0; 3]
-            {
-                Some(Aabb { min: value.m_world_aabb_min, max: value.m_world_aabb_max })
-            } else {
-                None
-            },
+            // Zero is a valid stationary measurement, not an unavailable value.
+            // The caller that knows the request flags clears this when omitted.
+            world_velocity: Some([
+                value.m_world_linear_velocity[0],
+                value.m_world_linear_velocity[1],
+                value.m_world_linear_velocity[2],
+                value.m_world_angular_velocity[0],
+                value.m_world_angular_velocity[1],
+                value.m_world_angular_velocity[2],
+            ]),
+            world_aabb: None,
         })
     }
 }
@@ -1285,6 +1320,7 @@ pub enum IkSolver {
 #[derive(Debug, Clone, Default)]
 pub struct InverseKinematicsOptions<'a> {
     pub joint_damping: Option<&'a [f64]>,
+    /// Optional seed. Target poses still use world coordinates.
     pub current_positions: Option<&'a [f64]>,
     pub solver: IkSolver,
     pub max_iterations: Option<i32>,
@@ -1299,6 +1335,7 @@ pub struct InverseKinematicsOptions<'a> {
 #[derive(Debug, Clone)]
 pub struct InverseKinematicsMultiTargetOptions<'a> {
     pub end_effector_link_indices: &'a [i32],
+    /// Target positions in world coordinates, including when a seed is supplied.
     pub target_positions: &'a [[f64; 3]],
     pub lower_limits: Option<&'a [f64]>,
     pub upper_limits: Option<&'a [f64]>,
@@ -1445,7 +1482,11 @@ pub struct CameraImageOptions {
 
 impl CameraImageOptions {
     pub fn new(width: i32, height: i32) -> Self {
-        Self { width, height, ..Self::default() }
+        Self {
+            width,
+            height,
+            ..Self::default()
+        }
     }
 }
 
@@ -1541,7 +1582,12 @@ pub struct DebugParameterOptions<'a> {
 
 impl Default for DebugParameterOptions<'_> {
     fn default() -> Self {
-        Self { name: "", range_min: 0.0, range_max: 1.0, start_value: 0.0 }
+        Self {
+            name: "",
+            range_min: 0.0,
+            range_max: 1.0,
+            start_value: 0.0,
+        }
     }
 }
 
@@ -1764,13 +1810,18 @@ impl MouseButtonState {
 impl From<b3MouseEvent> for MouseEvent {
     fn from(event: b3MouseEvent) -> Self {
         if event.m_eventType == 0 {
-            Self::Move { mouse_x: event.m_mousePosX, mouse_y: event.m_mousePosY }
+            Self::Move {
+                mouse_x: event.m_mousePosX,
+                mouse_y: event.m_mousePosY,
+            }
         } else {
             Self::Button {
                 mouse_x: event.m_mousePosX,
                 mouse_y: event.m_mousePosY,
                 button_index: event.m_buttonIndex,
-                button_state: MouseButtonState { flag: event.m_buttonState },
+                button_state: MouseButtonState {
+                    flag: event.m_buttonState,
+                },
             }
         }
     }
