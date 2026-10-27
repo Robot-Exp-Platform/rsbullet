@@ -1,5 +1,9 @@
 use std::{
-    sync::{Arc, mpsc},
+    sync::{
+        Arc,
+        atomic::{AtomicI64, Ordering},
+        mpsc,
+    },
     time::Duration,
 };
 
@@ -30,6 +34,10 @@ pub struct RsBullet {
     steps_completed: u64,
     simulated_time: Duration,
     clock: Arc<ManualClock>,
+    /// `simulated_time` in nanoseconds, set before the step observers run so
+    /// readings they take carry the instant of the step they measure; the
+    /// clock advances after them.
+    pub(crate) sim_nanos: Arc<AtomicI64>,
     faulted: bool,
     world_validity: WorldValidity,
 }
@@ -47,6 +55,7 @@ impl RsBullet {
             steps_completed: 0,
             simulated_time: Duration::ZERO,
             clock: Arc::new(ManualClock::simulation()),
+            sim_nanos: Arc::new(AtomicI64::new(0)),
             faulted: false,
             world_validity: WorldValidity::new(),
         };
@@ -97,6 +106,15 @@ impl RsBullet {
     /// Sum of the configured timesteps of completed native integrations.
     pub fn simulated_time(&self) -> Duration {
         self.simulated_time
+    }
+
+    /// [`simulated_time`](Self::simulated_time) on the simulation clock, for
+    /// stamping readings taken from this world.
+    pub fn simulated_stamp(&self) -> roplat_behavior::msgs::Stamp {
+        roplat_behavior::msgs::Stamp::from_duration(
+            roplat_behavior::msgs::clock::SIMULATION,
+            self.simulated_time,
+        )
     }
 
     pub fn step_time(&self) -> Duration {
@@ -157,6 +175,7 @@ impl RsBullet {
         self.client.step_simulation()?;
         self.steps_completed = next_step;
         self.simulated_time = next_time;
+        self.sim_nanos.store(self.simulated_stamp().nanos, Ordering::Release);
         let refreshed = self
             .state_refresh
             .iter_mut()
@@ -190,6 +209,7 @@ impl PhysicsEngine for RsBullet {
         self.steps_completed = 0;
         self.simulated_time = Duration::ZERO;
         self.clock = Arc::new(ManualClock::simulation());
+        self.sim_nanos.store(0, Ordering::Release);
         self.faulted = false;
         self.world_validity = WorldValidity::new();
         Ok(())
