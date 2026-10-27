@@ -40,6 +40,10 @@ tokio = { version = "1", features = ["rt", "macros"] }
 name = "panda_pick_place"
 required-features = ["roplat"]
 
+[[example]]
+name = "panda_session"
+required-features = ["roplat"]
+
 [features]
 default = ["gui"]
 gui = ["rsbullet-core/gui", "rsbullet_sys/gui"]

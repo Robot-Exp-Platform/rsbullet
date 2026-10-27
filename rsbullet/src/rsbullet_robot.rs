@@ -1,3 +1,4 @@
+use std::ops::ControlFlow;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -6,10 +7,10 @@ use std::{marker::PhantomData, sync::mpsc::Sender};
 use anyhow::Result;
 use roplat_behavior::behavior::{Arm, EndPoint, FlangeSpace, JointSpace, Joints};
 use roplat_behavior::{
-    ArmState, ArmTorqueControl, ControlObservation, ControlObserver, ControlSpace,
+    ArmState, ArmTorqueControl, ControlObservation, ControlObserver, ControlSpace, ControlStep,
     JointPositionControl, JointState, JointVelocityControl, LoadState, ModelSelectionError, MoveTo,
-    MoveTraj, Pose, Robot, RobotDescription, RobotException, RobotResult, SimulationBackend,
-    TorqueControl, behavior::*,
+    MoveTraj, PhysicsEngine, Pose, Robot, RobotDescription, RobotException, RobotResult,
+    SimulationBackend, TorqueControl, behavior::*,
 };
 use roplat_trajectory::path_generate;
 use rsbullet_core::{
@@ -97,10 +98,11 @@ impl<R> RsBulletRobot<R> {
 
     /// Register a queued control task for this simulated robot.
     ///
-    /// This is rsbullet-specific and intentionally does not implement
-    /// [`roplat_behavior::ControlWith`]. The method only submits the control
-    /// closure to the simulation queue; it does not step the physics engine or
-    /// wait for completion. The task is consumed by [`RsBullet::step`].
+    /// This queued form is rsbullet-specific and is not
+    /// [`roplat_behavior::ControlWith`]: it only submits the control closure to
+    /// the simulation queue; it does not step the physics engine or wait for
+    /// completion. The task is consumed by [`RsBullet::step`]. For a blocking
+    /// session that steps the world, use [`crate::RsBulletDevice`].
     /// The `before` / `after` hooks bracket the controller and observe the same
     /// pre-integration sample. Use [`RsBullet::add_step_observer`] for post-step
     /// object/contact evidence, or `read_state` after a successful engine step.
@@ -143,6 +145,107 @@ impl<R> RsBulletRobot<R> {
             Ok(done)
         })
         .map_err(|error| RobotException::CommandException(error.to_string()))
+    }
+
+    pub(crate) fn belongs_to(&self, engine: &RsBullet) -> bool {
+        Arc::ptr_eq(&self.world_validity, &engine.world_validity())
+    }
+}
+
+/// One control session of a robot over its own world, shared by the blocking
+/// and asynchronous sessions of [`crate::RsBulletDevice`].
+///
+/// A cycle is [`Session::observe`], the controller, then [`Session::conclude`]:
+/// the command is applied and the world integrates once. `Break` applies
+/// nothing; `done` applies its command and integrates once more. However the
+/// session ends, [`Session::end`] leaves the joints holding their measured
+/// position, as a real arm does after a control session.
+pub(crate) struct Session<'a, R, S> {
+    robot: &'a RsBulletRobot<R>,
+    engine: &'a mut RsBullet,
+    joint_indices: Vec<i32>,
+    full_state: RsBulletRobotState,
+    _channel: PhantomData<fn() -> S>,
+}
+
+impl<'a, R, S: RsBulletControlSpace<R>> Session<'a, R, S> {
+    pub(crate) fn begin(
+        robot: &'a RsBulletRobot<R>,
+        engine: &'a mut RsBullet,
+    ) -> RobotResult<Self> {
+        robot.ensure_valid()?;
+        if !robot.belongs_to(engine) {
+            return Err(RobotException::CommandException(
+                "simulation robot handle belongs to another world".into(),
+            ));
+        }
+        let joint_indices = robot.joint_indices.clone();
+        S::initialize(engine.client_mut(), robot.body_id, &joint_indices)?;
+        Ok(Self {
+            robot,
+            engine,
+            joint_indices,
+            full_state: RsBulletRobotState::default(),
+            _channel: PhantomData,
+        })
+    }
+
+    /// The physics timestep, passed to the controller every cycle.
+    pub(crate) fn period(&self) -> Duration {
+        self.engine.step_time()
+    }
+
+    /// Observe the channel's native state and notify the `before` observers.
+    pub(crate) fn observe(&mut self) -> RobotResult<S::Obs> {
+        let obs = S::observe(
+            self.engine.client_mut(),
+            self.robot.body_id,
+            &self.joint_indices,
+            self.robot.end_effector_link,
+            &self.robot.state_cache,
+        )?;
+        self.full_state = self
+            .robot
+            .state_cache
+            .lock()
+            .map_err(|_| bullet_error("state cache poisoned"))?
+            .clone();
+        notify_control_observers(
+            &self.robot.before_observers,
+            &self.full_state,
+            self.period(),
+        );
+        Ok(obs)
+    }
+
+    /// Notify the `after` observers, then apply a computed command and
+    /// integrate once. Returns whether the session continues.
+    pub(crate) fn conclude(&mut self, step: ControlStep<S::Command>) -> RobotResult<bool> {
+        notify_control_observers(&self.robot.after_observers, &self.full_state, self.period());
+        let ControlFlow::Continue((command, done)) = step else {
+            return Ok(false);
+        };
+        S::apply(
+            self.engine.client_mut(),
+            self.robot.body_id,
+            &self.joint_indices,
+            command,
+        )?;
+        self.engine.step()?;
+        Ok(!done)
+    }
+
+    /// Hold the joints, unless the world faulted, and report the outcome.
+    pub(crate) fn end(self, outcome: RobotResult<()>) -> RobotResult<()> {
+        if self.engine.is_faulted() || !self.robot.is_valid() {
+            return outcome;
+        }
+        let held = S::release(
+            self.engine.client_mut(),
+            self.robot.body_id,
+            &self.joint_indices,
+        );
+        outcome.and(held.map_err(Into::into))
     }
 }
 
@@ -694,10 +797,9 @@ where
 /// A rsbullet-specific mapping from a roplat_behavior control space to Bullet
 /// observations and commands.
 ///
-/// This trait is intentionally local to rsbullet's queued simulation model. It
-/// lets [`RsBulletRobot::control_with`] keep the same type-level control-space
-/// style without claiming that `RsBulletRobot` is a normal blocking
-/// `roplat_behavior::ControlWith` robot.
+/// This trait is local to rsbullet. It serves both the queued
+/// [`RsBulletRobot::control_with`] and the blocking `ControlWith` sessions of
+/// [`crate::RsBulletDevice`].
 pub trait RsBulletControlSpace<R>: ControlSpace<RsBulletRobot<R>> {
     fn initialize(
         _client: &mut PhysicsClient,
@@ -721,6 +823,16 @@ pub trait RsBulletControlSpace<R>: ControlSpace<RsBulletRobot<R>> {
         joint_indices: &[i32],
         command: Self::Command,
     ) -> BulletResult<()>;
+
+    /// Leave the joints in a resting mode when a blocking session ends. The
+    /// built-in channels hold the measured joint position.
+    fn release(
+        _client: &mut PhysicsClient,
+        _body_id: i32,
+        _joint_indices: &[i32],
+    ) -> BulletResult<()> {
+        Ok(())
+    }
 }
 
 fn bullet_error(message: &'static str) -> BulletError {
@@ -817,7 +929,7 @@ fn clamp_by<const N: usize>(mut values: [f64; N], limit: [f64; N]) -> BulletResu
     Ok(values)
 }
 
-fn clamp_position<const N: usize>(
+pub(crate) fn clamp_position<const N: usize>(
     mut values: [f64; N],
     lower: [f64; N],
     upper: [f64; N],
@@ -850,6 +962,30 @@ fn disable_default_motor<const N: usize>(
         joints,
         ControlModeArray::Velocity(&zero_velocity),
         Some(&zero_force),
+    )
+}
+
+/// Hold the measured position with the channel's effort limits.
+fn hold_measured_position<R: Joints<N>, const N: usize>(
+    client: &mut PhysicsClient,
+    body_id: i32,
+    joint_indices: &[i32],
+) -> BulletResult<()> {
+    let joints = checked_joints::<N>(joint_indices)?;
+    let states = client.get_joint_states(body_id, joints)?;
+    if states.len() < N {
+        return Err(bullet_error(
+            "incomplete joint state while holding position",
+        ));
+    }
+    let measured = std::array::from_fn(|i| states[i].position);
+    let target = clamp_position(measured, R::JOINT_MIN, R::JOINT_MAX)?;
+    let limits = joint_effort_limits::<R, N>(client, body_id, joint_indices)?;
+    client.set_joint_motor_control_array(
+        body_id,
+        joints,
+        ControlModeArray::Position(&target),
+        Some(&limits),
     )
 }
 
@@ -890,6 +1026,14 @@ where
             Some(&limits),
         )
     }
+
+    fn release(
+        client: &mut PhysicsClient,
+        body_id: i32,
+        joint_indices: &[i32],
+    ) -> BulletResult<()> {
+        hold_measured_position::<R, N>(client, body_id, joint_indices)
+    }
 }
 
 impl<R, const N: usize> RsBulletControlSpace<R> for JointVelocityControl<N>
@@ -928,6 +1072,14 @@ where
             ControlModeArray::Velocity(&command),
             Some(&limits),
         )
+    }
+
+    fn release(
+        client: &mut PhysicsClient,
+        body_id: i32,
+        joint_indices: &[i32],
+    ) -> BulletResult<()> {
+        hold_measured_position::<R, N>(client, body_id, joint_indices)
     }
 }
 
@@ -976,6 +1128,14 @@ where
             None,
         )
     }
+
+    fn release(
+        client: &mut PhysicsClient,
+        body_id: i32,
+        joint_indices: &[i32],
+    ) -> BulletResult<()> {
+        hold_measured_position::<R, N>(client, body_id, joint_indices)
+    }
 }
 
 impl<R, const N: usize> RsBulletControlSpace<R> for ArmTorqueControl<N>
@@ -1021,5 +1181,13 @@ where
             ControlModeArray::Torque(&command),
             None,
         )
+    }
+
+    fn release(
+        client: &mut PhysicsClient,
+        body_id: i32,
+        joint_indices: &[i32],
+    ) -> BulletResult<()> {
+        hold_measured_position::<R, N>(client, body_id, joint_indices)
     }
 }
