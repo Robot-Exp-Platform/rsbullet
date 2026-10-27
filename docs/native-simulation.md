@@ -136,6 +136,9 @@ holds its robot resource. Use `engine()` / `engine_mut()` between sessions and
 `into_parts()` to take the world back. Two robots that must be controlled in
 lockstep belong to one session over one combined robot, not to two devices.
 
+The [Panda session example](../rsbullet/examples/panda_session.rs) runs such a
+generic graph on a seven-joint Panda under gravity.
+
 The same channels implement `AsyncControlWith`, so an `AsyncControlRhythm`
 graph switches too: each callback is awaited, and the session yields to
 sibling futures after every integration.
