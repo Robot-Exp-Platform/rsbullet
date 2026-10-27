@@ -1,3 +1,4 @@
+mod device;
 mod entity;
 mod rsbullet;
 mod rsbullet_robot;
@@ -6,6 +7,7 @@ mod sensor;
 mod sim_rhythm;
 pub mod types;
 
+pub use device::*;
 pub use entity::*;
 pub use rsbullet::*;
 pub use rsbullet_core::*;

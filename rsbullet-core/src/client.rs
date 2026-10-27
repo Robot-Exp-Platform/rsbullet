@@ -719,8 +719,9 @@ impl PhysicsClient {
     /// ```rust
     /// use rsbullet_core::*;
     /// fn main() -> BulletResult<()> {
+    /// #   let bullet3_data = concat!(env!("CARGO_MANIFEST_DIR"), "/../rsbullet-sys/bullet3/data");
     ///     let mut physics_client = PhysicsClient::connect(Mode::Direct)?;
-    ///     physics_client.set_additional_search_path(PhysicsClient::bullet_data_path())?;
+    ///     physics_client.set_additional_search_path(bullet3_data)?;
     ///     let cube = physics_client.load_urdf("cube.urdf", None::<UrdfOptions>)?;
     ///     assert_eq!("baseLink", physics_client.get_body_info(cube)?.base_name);
     ///     for i in 0..10 {
@@ -798,8 +799,9 @@ impl PhysicsClient {
     /// ```rust
     /// use rsbullet_core::*;
     /// fn main() -> BulletResult<()> {
+    /// #   let bullet3_data = concat!(env!("CARGO_MANIFEST_DIR"), "/../rsbullet-sys/bullet3/data");
     ///     let mut physics_client = PhysicsClient::connect(Mode::Direct)?;
-    ///     physics_client.set_additional_search_path(PhysicsClient::bullet_data_path())?;
+    ///     physics_client.set_additional_search_path(bullet3_data)?;
     ///     let cubes = physics_client.load_sdf("two_cubes.sdf", None)?;
     ///     assert_eq!(3, cubes.len()); // 2 cubes + 1 plane
     ///     Ok(())
@@ -849,8 +851,9 @@ impl PhysicsClient {
     /// ```rust
     /// use rsbullet_core::*;
     /// fn main() -> BulletResult<()> {
+    /// #   let bullet3_data = concat!(env!("CARGO_MANIFEST_DIR"), "/../rsbullet-sys/bullet3/data");
     ///     let mut physics_client = PhysicsClient::connect(Mode::Direct)?;
-    ///     physics_client.set_additional_search_path(PhysicsClient::bullet_data_path())?;
+    ///     physics_client.set_additional_search_path(bullet3_data)?;
     ///     let stadium = physics_client.load_mjcf("mjcf/hello_mjcf.xml", None)?;
     ///     assert_eq!(2, stadium.len()); // 1 cube + 1 plane
     ///
@@ -900,8 +903,9 @@ impl PhysicsClient {
     ///# use rsbullet_core::*;
     ///#
     ///# fn main() -> BulletResult<()> {
+    ///#     let bullet3_data = concat!(env!("CARGO_MANIFEST_DIR"), "/../rsbullet-sys/bullet3/data");
     ///#     let mut physics_client = PhysicsClient::connect(Mode::Direct)?;
-    ///#     physics_client.set_additional_search_path(PhysicsClient::bullet_data_path())?;
+    ///#     physics_client.set_additional_search_path(bullet3_data)?;
     ///     let _bodies = physics_client.load_bullet("spider.bullet")?;
     ///#     Ok(())
     ///# }

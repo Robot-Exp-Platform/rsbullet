@@ -9,7 +9,7 @@ use std::{
 
 use roplat_behavior::{
     AddCollision, AddRobot, AddSearchPath, AddVisual, ModelFormat, PhysicsEngine, Renderer,
-    RobotDescription, SimulationBackend,
+    RobotDescription, SimulationBackend, msgs::ManualClock,
 };
 use rsbullet_core::{BulletResult, Mode, PhysicsClient};
 
@@ -33,6 +33,7 @@ pub struct RsBullet {
     time_step: Duration,
     steps_completed: u64,
     simulated_time: Duration,
+    clock: Arc<ManualClock>,
     /// `simulated_time` in nanoseconds, shared with step observers that stamp
     /// readings.
     pub(crate) sim_nanos: Arc<AtomicI64>,
@@ -52,6 +53,7 @@ impl RsBullet {
             time_step: Duration::from_secs_f64(1.0 / 240.0),
             steps_completed: 0,
             simulated_time: Duration::ZERO,
+            clock: Arc::new(ManualClock::simulation()),
             sim_nanos: Arc::new(AtomicI64::new(0)),
             faulted: false,
             world_validity: WorldValidity::new(),
@@ -118,6 +120,17 @@ impl RsBullet {
         self.time_step
     }
 
+    /// Simulation clock of this world, reading [`RsBullet::simulated_time`].
+    ///
+    /// It moves after each completed integration, once the post-step observers
+    /// have run, so a node waking on it reads the refreshed state. Stamp data
+    /// with it and wait on it to run a graph in simulated time. Reset starts a
+    /// new clock at zero; a clock taken before keeps the old world's time and
+    /// no longer moves.
+    pub fn clock(&self) -> Arc<ManualClock> {
+        self.clock.clone()
+    }
+
     /// A failed step requires resetting or replacing the world before continuing.
     /// Commands applied before an error cannot be rolled back.
     pub fn is_faulted(&self) -> bool {
@@ -161,11 +174,18 @@ impl RsBullet {
         self.client.step_simulation()?;
         self.steps_completed = next_step;
         self.simulated_time = next_time;
-        self.sim_nanos.store(self.simulated_stamp().nanos, Ordering::Release);
-        for refresh in &mut self.state_refresh {
-            refresh(&mut self.client)?;
-        }
-        Ok(())
+        // Readings refreshed below carry this step's time; the clock reaches it
+        // only once they are refreshed, so a node waking on it reads them.
+        self.sim_nanos
+            .store(self.simulated_stamp().nanos, Ordering::Release);
+        let refreshed = self
+            .state_refresh
+            .iter_mut()
+            .try_for_each(|refresh| refresh(&mut self.client));
+        // The integration happened even if a refresh failed.
+        self.clock
+            .set(i64::try_from(next_time.as_nanos()).unwrap_or(i64::MAX));
+        refreshed
     }
 }
 
@@ -190,6 +210,7 @@ impl PhysicsEngine for RsBullet {
         self.client.set_time_step(self.time_step)?;
         self.steps_completed = 0;
         self.simulated_time = Duration::ZERO;
+        self.clock = Arc::new(ManualClock::simulation());
         self.sim_nanos.store(0, Ordering::Release);
         self.faulted = false;
         self.world_validity = WorldValidity::new();

@@ -11,6 +11,7 @@ for the exact Git dependencies, native source submodule and headless features.
 | `PhysicsClient` | Scene creation, URDF loading, native IK, motor commands, actual state, contacts, cameras |
 | `RsBullet` | Ordered queued controls, one native integration, then state/observation refresh |
 | `RsBulletRobot<R>` | Selected robot joints, cached actual state, typed queued joint control |
+| `RsBulletDevice<R>` | One robot driving its own world: blocking `ControlWith` sessions and joint `MoveTo` |
 | `SimRhythm<E>` | Compatibility alias for `roplat_behavior::roplat::SimulationRhythm<E>`, defaulting to `RsBullet` |
 | Application Nodes | Task planning, feedback, commands and evidence processing |
 
@@ -108,6 +109,48 @@ Nullspace limits/ranges/rest poses must be supplied together with matching
 dimensions. Multi-target IK with nullspace parameters is explicitly unsupported;
 the native helper would otherwise silently reduce the request to one target.
 
+## Realtime control sessions
+
+A real arm paces its control session itself: `ControlWith::control_with_flow`
+blocks, calling the controller once per device cycle until it reports `done`
+or breaks. A robot handle cannot do that, because its world only advances in
+`RsBullet::step`. `RsBulletDevice::new(engine, robot)` takes the world together
+with one robot loaded into it, so its session can step the world:
+
+1. Observe the robot's native state for the channel.
+2. Call the controller with that observation and the physics timestep.
+3. Apply the command, then step the engine once (queued controls of other
+   bodies run inside that step, as usual).
+
+`Break` applies no command and integrates nothing. `done` applies its command
+and integrates once more. However the session ends, including on an error,
+the joints are left holding their measured position, as a real arm holds after
+its control session; a faulted world is left as it is. The joint position,
+velocity, torque and arm-torque channels are provided. The torque channels
+command raw joint torque: unlike Franka's FCI, Bullet adds no gravity
+compensation. Joint `MoveTo` runs an S-curve through the position channel and
+returns after its last integration; Cartesian `MoveTo` is unsupported.
+
+The device holds the world exclusively for the session, as a `ControlRhythm`
+holds its robot resource. Use `engine()` / `engine_mut()` between sessions and
+`into_parts()` to take the world back. Two robots that must be controlled in
+lockstep belong to one session over one combined robot, not to two devices.
+
+The [Panda session example](../rsbullet/examples/panda_session.rs) runs such a
+generic graph on a seven-joint Panda under gravity.
+
+The same channels implement `AsyncControlWith`, so an `AsyncControlRhythm`
+graph switches too: each callback is awaited, and the session yields to
+sibling futures after every integration.
+
+Sessions run in logical time. `.realtime(true)` paces cycle starts at the
+physics timestep on the wall clock; late cycles start at once and no
+integration is skipped. Only the blocking session can wait; an asynchronous
+session with `.realtime(true)` reports unsupported rather than block its
+executor. `RsBullet::clock()` is a `roplat_msgs::ManualClock` on
+the simulation clock: it reads `simulated_time()` after each completed
+integration and its observers, and a reset starts a new clock.
+
 ## Failure, reset and limits
 
 An engine step error stops the rhythm before another downstream tick and retains
@@ -140,7 +183,8 @@ Current boundaries: generic Cartesian `MoveTo` is unsupported (use native IK);
 generic payload mutation reports unsupported; legacy `Arm::with_*` setters do
 not configure this simulator. Use robot-description constants, explicit native
 commands and actual model dynamics instead. Queued control submission is not a
-blocking hardware control session and is not completion of physical motion.
+blocking hardware control session and is not completion of physical motion;
+`RsBulletDevice` provides both.
 
 ## Preserve useful evidence
 

@@ -21,6 +21,8 @@ Most applications should depend on `rsbullet`. The layers keep native build deta
 
 `RsBullet` owns the client and the simulation clock. A robot's `enqueue` or `control_with` call submits work; it does not run the physics engine. Each `sim.step()` drains queued work, runs active callbacks, then advances Bullet once. Callback completion removes that callback. This makes ownership and stepping explicit, but the application must keep stepping while queued work is active. A simulation step is not a guarantee of a real-time deadline or of matching a physical robot's behavior.
 
+A graph written for a real arm expects the driver's blocking `ControlWith` session instead. Wrap the world and one robot in `RsBulletDevice`: each control cycle observes the robot, calls the controller, applies the command and steps the world once, so the same `ControlRhythm` or `AsyncControlRhythm` runs on a real driver and in simulation. `RsBullet::clock()` exposes the simulated time as a `roplat_msgs` clock for nodes that stamp or wait on it.
+
 ## Prerequisites
 
 Use Rust nightly: `roplat_behavior`, a normal dependency, uses unstable Rust features. The native build also needs CMake and a C++ compiler:
@@ -154,7 +156,7 @@ For this branch's finite simulation and headless support, follow [source build a
 - [API inventory](RSBULLET_API_REFERENCE.md) for the command surface; check current signatures when adapting older PyBullet/RuBullet examples.
 - [Native Panda pick and place](docs/pick-place.md) for a complete headless roplat task with physical grasp, state evidence and camera output.
 - [Examples](rsbullet/examples) for constraints, dynamics, and rendering. Many open a GUI or need external assets.
-- [Robot builders and queued control](rsbullet/src/rsbullet_robot.rs), [simulation stepping](rsbullet/src/rsbullet.rs), and [SimRhythm](rsbullet/src/sim_rhythm.rs).
+- [Robot builders and queued control](rsbullet/src/rsbullet_robot.rs), [simulation stepping](rsbullet/src/rsbullet.rs), [SimRhythm](rsbullet/src/sim_rhythm.rs), and [realtime control sessions](docs/native-simulation.md#realtime-control-sessions).
 - [roplat_rerun](https://github.com/Robot-Exp-Platform/roplat_rerun) for visualizing simulation state in Rerun.
 
 ## License
