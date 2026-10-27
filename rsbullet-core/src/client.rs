@@ -718,16 +718,13 @@ impl PhysicsClient {
     /// # Example
     /// ```rust
     /// use rsbullet_core::*;
-    /// fn main() -> BulletResult<&mut Self> {
+    /// fn main() -> BulletResult<()> {
     ///     let mut physics_client = PhysicsClient::connect(Mode::Direct)?;
     ///     physics_client.set_additional_search_path(PhysicsClient::bullet_data_path())?;
-    ///     let cube = physics_client.load_urdf("cube.urdf", None)?;
+    ///     let cube = physics_client.load_urdf("cube.urdf", None::<UrdfOptions>)?;
     ///     assert_eq!("baseLink", physics_client.get_body_info(cube)?.base_name);
     ///     for i in 0..10 {
-    ///         let _cube = physics_client.load_urdf(
-    ///             "cube.urdf",
-    ///             None,
-    ///         )?;
+    ///         let _cube = physics_client.load_urdf("cube.urdf", None::<UrdfOptions>)?;
     ///     }
     ///     assert_eq!(11, physics_client.get_num_bodies());
     ///     Ok(())
@@ -800,7 +797,7 @@ impl PhysicsClient {
     /// # Example
     /// ```rust
     /// use rsbullet_core::*;
-    /// fn main() -> BulletResult<&mut Self> {
+    /// fn main() -> BulletResult<()> {
     ///     let mut physics_client = PhysicsClient::connect(Mode::Direct)?;
     ///     physics_client.set_additional_search_path(PhysicsClient::bullet_data_path())?;
     ///     let cubes = physics_client.load_sdf("two_cubes.sdf", None)?;
@@ -851,7 +848,7 @@ impl PhysicsClient {
     /// # Example
     /// ```rust
     /// use rsbullet_core::*;
-    /// fn main() -> BulletResult<&mut Self> {
+    /// fn main() -> BulletResult<()> {
     ///     let mut physics_client = PhysicsClient::connect(Mode::Direct)?;
     ///     physics_client.set_additional_search_path(PhysicsClient::bullet_data_path())?;
     ///     let stadium = physics_client.load_mjcf("mjcf/hello_mjcf.xml", None)?;
@@ -900,12 +897,12 @@ impl PhysicsClient {
     /// * `bullet_filename` - location of the `.bullet`
     /// # Example
     /// ```rust
-    ///# use rsbullet::*;
+    ///# use rsbullet_core::*;
     ///#
-    ///# fn main() -> BulletResult<&mut Self> {
+    ///# fn main() -> BulletResult<()> {
     ///#     let mut physics_client = PhysicsClient::connect(Mode::Direct)?;
     ///#     physics_client.set_additional_search_path(PhysicsClient::bullet_data_path())?;
-    ///     let points = physics_client.load_bullet("spider.bullet")?;
+    ///     let _bodies = physics_client.load_bullet("spider.bullet")?;
     ///#     Ok(())
     ///# }
     /// ```
