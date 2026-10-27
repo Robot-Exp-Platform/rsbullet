@@ -54,7 +54,7 @@ pub struct RsBulletRobot<R> {
     pub(crate) command_sender: Sender<QueuedControl>,
     pub end_effector_link: i32,
     state_cache: Arc<Mutex<RsBulletRobotState>>,
-    world_validity: Arc<AtomicBool>,
+    pub(crate) world_validity: Arc<AtomicBool>,
     before_observers: RsBulletControlObservers,
     after_observers: RsBulletControlObservers,
     /// Legacy metadata only; this field does not sleep or change the physics dt.

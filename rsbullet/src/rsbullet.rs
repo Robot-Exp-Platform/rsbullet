@@ -1,4 +1,11 @@
-use std::{sync::mpsc, time::Duration};
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicI64, Ordering},
+        mpsc,
+    },
+    time::Duration,
+};
 
 use roplat_behavior::{
     AddCollision, AddRobot, AddSearchPath, AddVisual, ModelFormat, PhysicsEngine, Renderer,
@@ -26,6 +33,9 @@ pub struct RsBullet {
     time_step: Duration,
     steps_completed: u64,
     simulated_time: Duration,
+    /// `simulated_time` in nanoseconds, shared with step observers that stamp
+    /// readings.
+    pub(crate) sim_nanos: Arc<AtomicI64>,
     faulted: bool,
     world_validity: WorldValidity,
 }
@@ -42,6 +52,7 @@ impl RsBullet {
             time_step: Duration::from_secs_f64(1.0 / 240.0),
             steps_completed: 0,
             simulated_time: Duration::ZERO,
+            sim_nanos: Arc::new(AtomicI64::new(0)),
             faulted: false,
             world_validity: WorldValidity::new(),
         };
@@ -94,6 +105,15 @@ impl RsBullet {
         self.simulated_time
     }
 
+    /// [`simulated_time`](Self::simulated_time) on the simulation clock, for
+    /// stamping readings taken from this world.
+    pub fn simulated_stamp(&self) -> roplat_behavior::msgs::Stamp {
+        roplat_behavior::msgs::Stamp::from_duration(
+            roplat_behavior::msgs::clock::SIMULATION,
+            self.simulated_time,
+        )
+    }
+
     pub fn step_time(&self) -> Duration {
         self.time_step
     }
@@ -141,6 +161,7 @@ impl RsBullet {
         self.client.step_simulation()?;
         self.steps_completed = next_step;
         self.simulated_time = next_time;
+        self.sim_nanos.store(self.simulated_stamp().nanos, Ordering::Release);
         for refresh in &mut self.state_refresh {
             refresh(&mut self.client)?;
         }
@@ -169,6 +190,7 @@ impl PhysicsEngine for RsBullet {
         self.client.set_time_step(self.time_step)?;
         self.steps_completed = 0;
         self.simulated_time = Duration::ZERO;
+        self.sim_nanos.store(0, Ordering::Release);
         self.faulted = false;
         self.world_validity = WorldValidity::new();
         Ok(())
