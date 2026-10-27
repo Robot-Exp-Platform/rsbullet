@@ -126,9 +126,11 @@ git clone --depth 1 https://github.com/bulletphysics/bullet3.git
 
 Point `set_additional_search_path` at that checkout's `examples/pybullet/gym/pybullet_data` directory and keep its meshes beside the URDFs. For a reproducible experiment, pin the model repository revision too. `BULLET_SKIP_ASSET_EXPORT=1` disables build-time asset copying; without it, the build may populate the user's Bullet data directory when that directory does not already exist.
 
-## Simulated force/torque sensor
+## Simulated sensors
 
 `sim.add_force_torque_sensor(&robot, joint_index, frame)` enables Bullet's sensor on one joint of a loaded robot and returns an `RsBulletForceTorque`, which implements `roplat_behavior::ForceTorqueSensor` like a real sensor driver. After every `sim.step()` it samples the wrench the parent exerts on the joint's child link, at the joint origin and in the child link's frame, stamped with simulation time (`clock::SIMULATION`, also available as `sim.simulated_stamp()`), the given frame, and a sequence number. `read_wrench` returns the latest sample (an error before the first step or after a reset); `bias_wrench` takes the latest sample as zero. Bullet itself reports this wrench at the child's centre of mass; the sensor converts it without changing the engine-wide joint feedback mode, so other `force_torque` readings from `get_joint_states` are unaffected.
+
+`sim.add_imu(&robot, link_index, frame)` (`-1` for the base) returns an `RsBulletImu` implementing `roplat_behavior::ImuSensor`, sampled the same way at the link's URDF frame: orientation in the world, angular velocity in the link frame, and linear acceleration as an accelerometer's specific force `Rᵀ(a − g)` with the engine's current gravity (a link at rest reads +9.81 m/s² up, a falling one about zero). Acceleration is differenced between steps, so the first sample leaves it out of the `Imu` mask.
 
 ## Optional integration and source builds
 
