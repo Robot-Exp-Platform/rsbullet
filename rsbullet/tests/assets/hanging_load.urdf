@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<!-- A fixed base holding a 2 kg load through a fixed joint; the load's
+     centre of mass sits 0.1 m along x from the joint, its inertial frame
+     turned a quarter about x. -->
+<robot name="hanging_load">
+  <link name="base">
+    <inertial><mass value="1"/><inertia ixx="0.01" ixy="0" ixz="0" iyy="0.01" iyz="0" izz="0.01"/></inertial>
+  </link>
+  <link name="load">
+    <inertial><origin xyz="0.1 0 0" rpy="1.5707963267948966 0 0"/><mass value="2"/>
+      <inertia ixx="0.01" ixy="0" ixz="0" iyy="0.01" iyz="0" izz="0.01"/></inertial>
+  </link>
+  <joint name="sensor" type="fixed">
+    <parent link="base"/><child link="load"/><origin xyz="0 0 -0.2"/>
+  </joint>
+</robot>
