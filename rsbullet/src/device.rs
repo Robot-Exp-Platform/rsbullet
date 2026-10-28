@@ -8,11 +8,13 @@ use std::{
 use roplat_behavior::behavior::{Arm, EndPoint, FlangeSpace, JointSpace, Joints};
 use roplat_behavior::{
     ArmState, ArmTorqueControl, AsyncControlCallback, AsyncControlWith, ControlObservation,
-    ControlStep, ControlWith, JointPositionControl, JointState, JointVelocityControl, LoadState,
-    MoveTo, Pose, Robot, RobotException, RobotResult, TorqueControl,
+    ControlStep, ControlWith, Gripper, JointPositionControl, JointState, JointVelocityControl,
+    LoadState, MoveTo, Pose, Robot, RobotException, RobotResult, TorqueControl,
+    msgs::{GripperCommand, GripperState},
 };
 use roplat_trajectory::path_generate;
 
+use crate::gripper::ParallelFingers;
 use crate::rsbullet_robot::{RsBulletControlSpace, Session, clamp_position};
 use crate::{RsBullet, RsBulletRobot, types::RsBulletRobotState};
 
@@ -34,10 +36,15 @@ use crate::{RsBullet, RsBulletRobot, types::RsBulletRobotState};
 /// Sessions run in logical time unless [`RsBulletDevice::realtime`] is set;
 /// asynchronous sessions yield to sibling futures after every integration.
 /// Nodes that need the simulated time read [`RsBullet::clock`].
+///
+/// A hand on the same body becomes the device's [`Gripper`] through
+/// [`RsBulletDevice::with_gripper`]. Its motions step the world too, so they
+/// return once the fingers come to rest, as a real gripper's do.
 pub struct RsBulletDevice<R> {
     engine: RsBullet,
     robot: RsBulletRobot<R>,
     realtime: bool,
+    gripper: Option<ParallelFingers>,
 }
 
 impl<R> RsBulletDevice<R> {
@@ -52,15 +59,64 @@ impl<R> RsBulletDevice<R> {
             engine,
             robot,
             realtime: false,
+            gripper: None,
         })
     }
 
     /// Pace control cycles at the physics timestep on the wall clock. A late
     /// cycle starts at once; no integration is skipped. Only blocking sessions
     /// can wait; an asynchronous session then reports unsupported.
+    /// Gripper motions are paced the same way.
     pub fn realtime(mut self, enabled: bool) -> Self {
         self.realtime = enabled;
         self
+    }
+
+    /// Drives two finger joints of the robot's body, named as in the model,
+    /// as this device's [`Gripper`].
+    ///
+    /// The fingers must be prismatic joints outside the controlled joints,
+    /// each closing at zero and opening to the same finite limit, with a
+    /// finite URDF effort limit, as `panda_finger_joint1` and
+    /// `panda_finger_joint2` of the Panda hand. The opening is the sum of the
+    /// two positions. A move uses the effort limit; a grasp force may not
+    /// exceed it. A grasp succeeds within [`GRASP_EPSILON`](crate::GRASP_EPSILON)
+    /// of its width and keeps squeezing until the next gripper command; a
+    /// failed grasp is not an error, `read_gripper().grasped` reports it.
+    ///
+    /// During a gripper motion the controlled joints keep their last motor
+    /// commands; after a control session or joint `MoveTo` they hold their
+    /// measured position.
+    pub fn with_gripper(mut self, fingers: [&str; 2]) -> RobotResult<Self> {
+        self.ensure_valid()?;
+        let fingers = ParallelFingers::attach(
+            self.engine.client_mut(),
+            self.robot.body_id,
+            &self.robot.joint_indices,
+            fingers,
+        )?;
+        self.gripper = Some(fingers);
+        Ok(self)
+    }
+
+    fn ensure_valid(&self) -> RobotResult<()> {
+        if self.robot.is_valid() {
+            Ok(())
+        } else {
+            Err(RobotException::CommandException(
+                "simulated device is invalid after engine fault, reset, or shutdown".into(),
+            ))
+        }
+    }
+
+    fn gripper_parts(&mut self) -> RobotResult<(&mut ParallelFingers, &mut RsBullet)> {
+        self.ensure_valid()?;
+        let fingers = self.gripper.as_mut().ok_or_else(|| {
+            RobotException::UnprocessableInstructionError(
+                "this simulated device has no gripper; attach one with with_gripper".into(),
+            )
+        })?;
+        Ok((fingers, &mut self.engine))
     }
 
     pub fn engine(&self) -> &RsBullet {
@@ -248,6 +304,39 @@ control_channel!(JointPositionControl, JointState, hold_joint_position);
 control_channel!(JointVelocityControl, JointState, hold_joint_velocity);
 control_channel!(TorqueControl, JointState, hold_joint_torque);
 control_channel!(ArmTorqueControl, ArmState, hold_arm_torque);
+
+/// Available after [`RsBulletDevice::with_gripper`]; otherwise every method
+/// reports the gripper unsupported.
+impl<R> Gripper for RsBulletDevice<R> {
+    fn read_gripper(&mut self) -> RobotResult<GripperState> {
+        let (fingers, engine) = self.gripper_parts()?;
+        fingers.read(engine.client_mut())
+    }
+
+    /// Steps the world until the fingers come to rest. A move that stops
+    /// short of its width by more than [`MOVE_TOLERANCE`](crate::MOVE_TOLERANCE)
+    /// is an error and leaves the fingers holding where they stopped.
+    fn move_gripper(&mut self, command: GripperCommand) -> RobotResult<()> {
+        let realtime = self.realtime;
+        let (fingers, engine) = self.gripper_parts()?;
+        fingers.command(engine, realtime, command)
+    }
+
+    /// Opens to the full width at [`HOMING_SPEED`](crate::HOMING_SPEED); the
+    /// simulated stroke needs no calibration.
+    fn home_gripper(&mut self) -> RobotResult<()> {
+        let realtime = self.realtime;
+        let (fingers, engine) = self.gripper_parts()?;
+        fingers.home(engine, realtime)
+    }
+
+    /// Holds the measured finger positions, releasing a grasp; nothing is
+    /// integrated.
+    fn stop_gripper(&mut self) -> RobotResult<()> {
+        let (fingers, engine) = self.gripper_parts()?;
+        fingers.hold(engine.client_mut())
+    }
+}
 
 impl<const N: usize, R> MoveTo<JointSpace<N>> for RsBulletDevice<R>
 where

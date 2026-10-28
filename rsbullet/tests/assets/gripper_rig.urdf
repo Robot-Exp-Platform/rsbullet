@@ -1,0 +1,37 @@
+<?xml version="1.0"?>
+<!-- A vertical lift carrying a parallel hand. The lift is the controlled
+     joint; the two fingers close at zero and open 0.04 m each along their
+     axes (left +y, right -y), so the inner faces are q_left + q_right apart.
+     The fingers hang 0.06 m below the carriage, whose underside sits 0.31 m
+     above the base at lift zero. -->
+<robot name="gripper_rig">
+  <link name="base">
+    <inertial><mass value="1"/><inertia ixx="0.01" ixy="0" ixz="0" iyy="0.01" iyz="0" izz="0.01"/></inertial>
+  </link>
+  <link name="carriage">
+    <inertial><mass value="0.5"/><inertia ixx="0.001" ixy="0" ixz="0" iyy="0.001" iyz="0" izz="0.001"/></inertial>
+    <collision><geometry><box size="0.04 0.12 0.02"/></geometry></collision>
+  </link>
+  <link name="left_finger">
+    <inertial><origin xyz="0 0.005 -0.03"/><mass value="0.05"/>
+      <inertia ixx="1e-5" ixy="0" ixz="0" iyy="1e-5" iyz="0" izz="1e-5"/></inertial>
+    <collision><origin xyz="0 0.005 -0.03"/><geometry><box size="0.02 0.01 0.06"/></geometry></collision>
+  </link>
+  <link name="right_finger">
+    <inertial><origin xyz="0 -0.005 -0.03"/><mass value="0.05"/>
+      <inertia ixx="1e-5" ixy="0" ixz="0" iyy="1e-5" iyz="0" izz="1e-5"/></inertial>
+    <collision><origin xyz="0 -0.005 -0.03"/><geometry><box size="0.02 0.01 0.06"/></geometry></collision>
+  </link>
+  <joint name="lift" type="prismatic">
+    <parent link="base"/><child link="carriage"/><origin xyz="0 0 0.32"/>
+    <axis xyz="0 0 1"/><limit lower="-0.2" upper="0.2" effort="200" velocity="1"/>
+  </joint>
+  <joint name="finger_left" type="prismatic">
+    <parent link="carriage"/><child link="left_finger"/><origin xyz="0 0 -0.01"/>
+    <axis xyz="0 1 0"/><limit lower="0" upper="0.04" effort="20" velocity="0.2"/>
+  </joint>
+  <joint name="finger_right" type="prismatic">
+    <parent link="carriage"/><child link="right_finger"/><origin xyz="0 0 -0.01"/>
+    <axis xyz="0 -1 0"/><limit lower="0" upper="0.04" effort="20" velocity="0.2"/>
+  </joint>
+</robot>
