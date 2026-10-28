@@ -180,13 +180,18 @@ Code that takes the arm and the gripper as two separate resources, as with
 Franka's separate arm and hand connections, needs both from one device here.
 
 The [planned pick example](../rsbullet/examples/panda_planned_pick.rs) puts the
-pieces together on a Panda: RRT-Connect plans each motion against a second
-Bullet world used as the planning scene, COPP times it, a
+pieces together on a Panda: RRT-Connect plans each motion against a
+`roplat_scene::PlanningScene` built from the same URDF, COPP times it, a
 `JointTrajectoryFollower` plays it in a `ControlRhythm` graph on the device,
-and the hand grasps and releases through `Gripper`. It carries a cube over a
-wall and checks that the cube lands within 5 mm of its place. Its header lists
-what the stand-in planning scene leaves out: the held cube, an
-allowed-collision matrix and self-collision.
+and the hand grasps and releases through `Gripper`. The scene checks the
+arm's self-collision, lets the open fingers reach around the cube, and
+carries the cube in the hand once grasped. The example carries the cube over
+a wall and checks that it lands within 5 mm of its place. Planning does not
+touch Bullet; inverse kinematics comes from `roplat_kinematics`.
+
+`tests/planning_scene.rs` loads the Panda into both and compares link
+distances: Bullet never finds two links closer than the scene does, less its
+1 mm hull margins, though it often reports them farther apart.
 
 Sessions run in logical time. `.realtime(true)` paces cycle starts at the
 physics timestep on the wall clock; late cycles start at once and no

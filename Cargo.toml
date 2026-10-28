@@ -8,3 +8,6 @@ roplat = { path = "../roplat/roplat" }
 roplat_msgs = { path = "../roplat/roplat_msgs" }
 roplat_behavior = { path = "../roplat_behavior/roplat_behavior" }
 roplat_trajectory = { path = "../roplat_behavior/roplat_trajectory" }
+roplat_description = { path = "../roplat_behavior/roplat_description" }
+roplat_kinematics = { path = "../roplat_behavior/roplat_kinematics" }
+roplat_scene = { path = "../roplat_behavior/roplat_scene" }
