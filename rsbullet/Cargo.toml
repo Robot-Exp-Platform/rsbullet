@@ -44,10 +44,14 @@ required-features = ["roplat"]
 name = "panda_session"
 required-features = ["roplat"]
 
+[[example]]
+name = "panda_planned_pick"
+required-features = ["roplat"]
+
 [features]
 default = ["gui"]
 gui = ["rsbullet-core/gui", "rsbullet_sys/gui"]
-roplat = ["dep:roplat", "roplat_behavior/roplat"]
+roplat = ["dep:roplat", "roplat_behavior/roplat", "roplat_trajectory/roplat"]
 dart = ["rsbullet-core/dart"]
 physx = ["rsbullet-core/physx"]
 mujoco = ["rsbullet-core/mujoco"]

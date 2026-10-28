@@ -179,6 +179,15 @@ steps the world and returns when the fingers come to rest:
 Code that takes the arm and the gripper as two separate resources, as with
 Franka's separate arm and hand connections, needs both from one device here.
 
+The [planned pick example](../rsbullet/examples/panda_planned_pick.rs) puts the
+pieces together on a Panda: RRT-Connect plans each motion against a second
+Bullet world used as the planning scene, COPP times it, a
+`JointTrajectoryFollower` plays it in a `ControlRhythm` graph on the device,
+and the hand grasps and releases through `Gripper`. It carries a cube over a
+wall and checks that the cube lands within 5 mm of its place. Its header lists
+what the stand-in planning scene leaves out: the held cube, an
+allowed-collision matrix and self-collision.
+
 Sessions run in logical time. `.realtime(true)` paces cycle starts at the
 physics timestep on the wall clock; late cycles start at once and no
 integration is skipped. Only the blocking session can wait; an asynchronous
