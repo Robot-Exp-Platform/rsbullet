@@ -11,7 +11,7 @@ use roplat_behavior::msgs::GripperCommand;
 use roplat_behavior::{
     AddRobot, EntityBuilder, Gripper, MoveTo, PhysicsEngine, RobotDescription, RobotException,
 };
-use rsbullet::{GRASP_EPSILON, MOVE_TOLERANCE, Mode, RsBullet, RsBulletDevice};
+use rsbullet::{ForceFrame, GRASP_EPSILON, MOVE_TOLERANCE, Mode, RsBullet, RsBulletDevice};
 
 /// A vertical lift carrying a hand of two 0.04 m fingers (effort 20 N).
 struct Rig;
@@ -74,32 +74,46 @@ fn rig() -> anyhow::Result<RsBulletDevice<Rig>> {
     Ok(RsBulletDevice::new(engine, rig)?)
 }
 
-/// The rig holding its lift with the hand open, and the block on the table
-/// between the fingers when `block` is set. Returns the block's height,
-/// sampled after every step.
-fn scene(block: bool) -> anyhow::Result<(RsBulletDevice<Rig>, Arc<Mutex<f64>>)> {
+/// The rig holding its lift with the hand open.
+fn scene() -> anyhow::Result<RsBulletDevice<Rig>> {
     let mut device = rig()?.with_gripper(FINGERS)?;
     MoveTo::<JointSpace<1>>::move_to(&mut device, [0.0])?;
     device.home_gripper()?;
-    let height = Arc::new(Mutex::new(f64::NAN));
-    if block {
-        let engine = device.engine_mut();
-        let body = engine
-            .robot_builder::<Block>("block")
-            .base(Isometry3::translation(0.0, 0.0, ON_TABLE))
-            .load()?
-            .body_id;
-        let sink = height.clone();
-        engine.add_step_observer(move |client| {
-            let pose = client.get_base_position_and_orientation(body)?;
-            *sink.lock().unwrap() = pose.translation.vector.z;
-            Ok(())
-        });
-        for _ in 0..120 {
-            engine.step()?;
-        }
+    Ok(device)
+}
+
+/// The block and its position, sampled after every step.
+struct Tracked {
+    body: i32,
+    at: Arc<Mutex<[f64; 3]>>,
+}
+
+impl Tracked {
+    fn at(&self) -> [f64; 3] {
+        *self.at.lock().unwrap()
     }
-    Ok((device, height))
+}
+
+/// [`scene`] with the block resting on the table between the fingers.
+fn scene_with_block() -> anyhow::Result<(RsBulletDevice<Rig>, Tracked)> {
+    let mut device = scene()?;
+    let engine = device.engine_mut();
+    let body = engine
+        .robot_builder::<Block>("block")
+        .base(Isometry3::translation(0.0, 0.0, ON_TABLE))
+        .load()?
+        .body_id;
+    let at = Arc::new(Mutex::new([f64::NAN; 3]));
+    let sink = at.clone();
+    engine.add_step_observer(move |client| {
+        let position = client.get_base_position_and_orientation(body)?.translation;
+        *sink.lock().unwrap() = [position.x, position.y, position.z];
+        Ok(())
+    });
+    for _ in 0..120 {
+        engine.step()?;
+    }
+    Ok((device, Tracked { body, at }))
 }
 
 fn unprocessable<T>(result: Result<T, RobotException>) -> bool {
@@ -116,6 +130,8 @@ fn attaching_checks_the_finger_joints() -> anyhow::Result<()> {
     ));
     assert!(unprocessable(rig()?.with_gripper(["finger_left", "lift"])));
     assert!(unprocessable(rig()?.with_gripper(["finger_left", "thumb"])));
+    let twice = rig()?.with_gripper(FINGERS)?.with_gripper(FINGERS);
+    assert!(unprocessable(twice));
     let mut bare = rig()?;
     assert!(unprocessable(bare.read_gripper()));
     assert!(unprocessable(bare.move_gripper(command(0.02, 0.0))));
@@ -124,7 +140,7 @@ fn attaching_checks_the_finger_joints() -> anyhow::Result<()> {
 
 #[test]
 fn homing_opens_and_a_free_move_reaches_its_width() -> anyhow::Result<()> {
-    let (mut device, _) = scene(false)?;
+    let mut device = scene()?;
     let open = device.read_gripper()?;
     assert!((open.width - 0.08).abs() <= MOVE_TOLERANCE, "{open:?}");
     // Bullet keeps joint limits in single precision.
@@ -143,14 +159,14 @@ fn homing_opens_and_a_free_move_reaches_its_width() -> anyhow::Result<()> {
 
 #[test]
 fn a_grasp_holds_the_block_through_a_lift_and_a_release_drops_it() -> anyhow::Result<()> {
-    let (mut device, height) = scene(true)?;
+    let (mut device, block) = scene_with_block()?;
     device.move_gripper(command(0.04, 10.0))?;
     let held = device.read_gripper()?;
     assert_eq!(held.grasped, 1, "{held:?}");
     assert!((held.width - 0.04).abs() <= GRASP_EPSILON, "{held:?}");
 
     MoveTo::<JointSpace<1>>::move_to(&mut device, [0.1])?;
-    let lifted = *height.lock().unwrap();
+    let lifted = block.at()[2];
     assert!(
         (lifted - (ON_TABLE + 0.1)).abs() < 0.01,
         "block at {lifted}"
@@ -162,14 +178,47 @@ fn a_grasp_holds_the_block_through_a_lift_and_a_release_drops_it() -> anyhow::Re
     for _ in 0..240 {
         device.engine_mut().step()?;
     }
-    let dropped = *height.lock().unwrap();
+    let dropped = block.at()[2];
     assert!(dropped < ON_TABLE + 0.02, "block at {dropped}");
+    Ok(())
+}
+
+/// Two force-limited fingers alone would let a squeezed block slide along
+/// the closing axis; the coupling holds them mirrored.
+#[test]
+fn the_coupled_fingers_hold_a_block_against_a_sideways_push() -> anyhow::Result<()> {
+    let (mut device, block) = scene_with_block()?;
+    device.move_gripper(command(0.04, 10.0))?;
+    MoveTo::<JointSpace<1>>::move_to(&mut device, [0.05])?;
+    let before = block.at();
+    let (body, mut pushes) = (block.body, 240);
+    // An observer's force acts during the next step: 3 N along +y for 1 s.
+    device.engine_mut().add_step_observer(move |client| {
+        if pushes > 0 {
+            pushes -= 1;
+            let at = client.get_base_position_and_orientation(body)?.translation;
+            client.apply_external_force(
+                body,
+                -1,
+                [0.0, 3.0, 0.0],
+                [at.x, at.y, at.z],
+                ForceFrame::World,
+            )?;
+        }
+        Ok(())
+    });
+    for _ in 0..240 {
+        device.engine_mut().step()?;
+    }
+    let slid = block.at()[1] - before[1];
+    assert!(slid.abs() < 2e-3, "the block slid {slid} m");
+    assert_eq!(device.read_gripper()?.grasped, 1);
     Ok(())
 }
 
 #[test]
 fn a_grasp_that_closes_on_nothing_is_reported_not_raised() -> anyhow::Result<()> {
-    let (mut device, _) = scene(false)?;
+    let mut device = scene()?;
     device.move_gripper(command(0.04, 10.0))?;
     let state = device.read_gripper()?;
     assert_eq!(state.grasped, 0, "{state:?}");
@@ -179,7 +228,7 @@ fn a_grasp_that_closes_on_nothing_is_reported_not_raised() -> anyhow::Result<()>
 
 #[test]
 fn a_move_blocked_by_the_block_is_an_error() -> anyhow::Result<()> {
-    let (mut device, _) = scene(true)?;
+    let (mut device, _) = scene_with_block()?;
     let blocked = device.move_gripper(command(0.01, 0.0));
     assert!(
         matches!(blocked, Err(RobotException::CommandException(_))),
@@ -193,7 +242,7 @@ fn a_move_blocked_by_the_block_is_an_error() -> anyhow::Result<()> {
 
 #[test]
 fn stopping_releases_a_grasp() -> anyhow::Result<()> {
-    let (mut device, _) = scene(true)?;
+    let (mut device, _) = scene_with_block()?;
     device.move_gripper(command(0.04, 10.0))?;
     assert_eq!(device.read_gripper()?.grasped, 1);
     let before = device.engine().steps_completed();
@@ -205,7 +254,7 @@ fn stopping_releases_a_grasp() -> anyhow::Result<()> {
 
 #[test]
 fn commands_outside_the_hand_are_refused_without_stepping() -> anyhow::Result<()> {
-    let (mut device, _) = scene(false)?;
+    let mut device = scene()?;
     let before = device.engine().steps_completed();
     for refused in [
         command(0.09, 0.0),

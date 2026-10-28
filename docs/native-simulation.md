@@ -154,6 +154,11 @@ steps the world and returns when the fingers come to rest:
 - The fingers must be prismatic joints outside the controlled joints, closing
   at zero and opening to one shared limit, with finite URDF effort limits. The
   opening is the sum of the two positions.
+- A gear constraint (ratio −1, bounded by five times the effort limit) keeps
+  the fingers mirrored, as one drive moves both fingers of a real hand and as
+  pybullet's Panda example couples them. Without it, two force-limited fingers
+  squeezing an object offer no resistance to a push along the closing axis,
+  and a held object slides between them when the arm accelerates.
 - Both finger targets ramp at half the commanded speed. A move (`force` zero)
   uses the effort limit and fails when it stops more than `MOVE_TOLERANCE`
   (2 mm) short of its width, leaving the fingers holding where they stopped.

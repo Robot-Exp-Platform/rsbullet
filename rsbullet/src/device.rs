@@ -79,8 +79,10 @@ impl<R> RsBulletDevice<R> {
     /// each closing at zero and opening to the same finite limit, with a
     /// finite URDF effort limit, as `panda_finger_joint1` and
     /// `panda_finger_joint2` of the Panda hand. The opening is the sum of the
-    /// two positions. A move uses the effort limit; a grasp force may not
-    /// exceed it. A grasp succeeds within [`GRASP_EPSILON`](crate::GRASP_EPSILON)
+    /// two positions, and a gear constraint keeps the fingers mirrored, as one
+    /// drive moves both fingers of a real hand. A move uses the effort limit;
+    /// a grasp force may not exceed it. A grasp succeeds within
+    /// [`GRASP_EPSILON`](crate::GRASP_EPSILON)
     /// of its width and keeps squeezing until the next gripper command; a
     /// failed grasp is not an error, `read_gripper().grasped` reports it.
     ///
@@ -89,6 +91,11 @@ impl<R> RsBulletDevice<R> {
     /// measured position.
     pub fn with_gripper(mut self, fingers: [&str; 2]) -> RobotResult<Self> {
         self.ensure_valid()?;
+        if self.gripper.is_some() {
+            return Err(RobotException::UnprocessableInstructionError(
+                "this simulated device already has a gripper".into(),
+            ));
+        }
         let fingers = ParallelFingers::attach(
             self.engine.client_mut(),
             self.robot.body_id,

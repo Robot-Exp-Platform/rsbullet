@@ -8,7 +8,9 @@ use roplat_behavior::{
     PhysicsEngine, RobotException, RobotResult,
     msgs::{GripperCommand, GripperState},
 };
-use rsbullet_core::{BulletResult, ControlModeArray, JointType, PhysicsClient};
+use rsbullet_core::{
+    BulletResult, ConstraintCreateOptions, ControlModeArray, JointType, PhysicsClient,
+};
 
 use crate::RsBullet;
 
@@ -29,12 +31,20 @@ const SETTLE_LIMIT: f64 = 2.0;
 /// Distance (m) between a finger and its target beyond which a still finger
 /// is blocked rather than arrived.
 const STALL_GAP: f64 = 2e-3;
+/// Force bound of the finger coupling, as a multiple of the effort limit.
+const COUPLING_STRENGTH: f64 = 5.0;
 
 /// Two prismatic finger joints of one body, driven as a parallel gripper.
 ///
 /// Each finger closes at zero and opens along its axis, as in the Panda
 /// hand, so the opening is the sum of the two finger positions and each
 /// finger travels half of a width change.
+///
+/// A gear constraint keeps the fingers mirrored, as one drive moves both
+/// fingers of a parallel hand (pybullet's Panda example couples them the
+/// same way). Without it, two force-limited fingers squeezing an object
+/// resist its sideways push with nothing, and a held object slides along
+/// the closing axis whenever the arm accelerates.
 pub(crate) struct ParallelFingers {
     body: i32,
     joints: [i32; 2],
@@ -88,11 +98,24 @@ impl ParallelFingers {
         if first.upper_limit != second.upper_limit {
             return Err(invalid("the two fingers must share one stroke".into()));
         }
+        let max_force = first.max_force.min(second.max_force);
+        client.create_constraint(&ConstraintCreateOptions {
+            parent_body: body,
+            parent_link: Some(first.joint_index as usize),
+            child_body: body,
+            child_link: Some(second.joint_index as usize),
+            joint_type: JointType::Gear,
+            joint_axis: [1.0, 0.0, 0.0],
+            max_applied_force: COUPLING_STRENGTH * max_force,
+            gear_ratio: Some(-1.0),
+            erp: Some(0.1),
+            ..Default::default()
+        })?;
         Ok(Self {
             body,
             joints: [first.joint_index, second.joint_index],
             stroke: first.upper_limit,
-            max_force: first.max_force.min(second.max_force),
+            max_force,
             grasp: None,
         })
     }

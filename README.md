@@ -134,7 +134,7 @@ Point `set_additional_search_path` at that checkout's `examples/pybullet/gym/pyb
 
 `sim.add_imu(&robot, link_index, frame)` (`-1` for the base) returns an `RsBulletImu` implementing `roplat_behavior::ImuSensor`, sampled the same way at the link's URDF frame: orientation in the world, angular velocity in the link frame, and linear acceleration as an accelerometer's specific force `Rᵀ(a − g)` with the engine's current gravity (a link at rest reads +9.81 m/s² up, a falling one about zero). Acceleration is differenced between steps, so the first sample leaves it out of the `Imu` mask.
 
-`device.with_gripper(["panda_finger_joint1", "panda_finger_joint2"])` drives two prismatic finger joints of an `RsBulletDevice`'s body as a `roplat_behavior::Gripper`. `move_gripper` steps the world until the fingers rest: a zero-force move goes to the width and fails if something stops it short, while a grasp closes with the given force and reports in `read_gripper().grasped` whether the fingers stopped within 0.01 m of the width. [Native simulation](docs/native-simulation.md#the-hand-as-a-gripper) gives the full semantics.
+`device.with_gripper(["panda_finger_joint1", "panda_finger_joint2"])` drives two prismatic finger joints of an `RsBulletDevice`'s body as a `roplat_behavior::Gripper`, coupled by a gear constraint so they stay mirrored like a real hand's. `move_gripper` steps the world until the fingers rest: a zero-force move goes to the width and fails if something stops it short, while a grasp closes with the given force and reports in `read_gripper().grasped` whether the fingers stopped within 0.01 m of the width. [Native simulation](docs/native-simulation.md#the-hand-as-a-gripper) gives the full semantics.
 
 ## Optional integration and source builds
 
