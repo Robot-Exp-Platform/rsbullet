@@ -11,7 +11,7 @@ for the exact Git dependencies, native source submodule and headless features.
 | `PhysicsClient` | Scene creation, URDF loading, native IK, motor commands, actual state, contacts, cameras |
 | `RsBullet` | Ordered queued controls, one native integration, then state/observation refresh |
 | `RsBulletRobot<R>` | Selected robot joints, cached actual state, typed queued joint control |
-| `RsBulletDevice<R>` | One robot driving its own world: blocking `ControlWith` sessions and joint `MoveTo` |
+| `RsBulletDevice<R>` | One robot driving its own world: blocking `ControlWith` sessions, joint `MoveTo` and, with a hand, `Gripper` |
 | `SimRhythm<E>` | Compatibility alias for `roplat_behavior::roplat::SimulationRhythm<E>`, defaulting to `RsBullet` |
 | Application Nodes | Task planning, feedback, commands and evidence processing |
 
@@ -54,7 +54,8 @@ let arm = engine.robot_builder::<Panda>("arm")
 ```
 
 The two finger joints remain part of the same physical body. Control them through
-their native indices with explicit force bounds. Requested joint order is
+their native indices with explicit force bounds, or attach them to the device as
+its gripper (see below). Requested joint order is
 preserved; duplicate, fixed, unknown joints and missing named end effectors are
 rejected. A failed builder configuration removes the body it just created.
 
@@ -142,6 +143,41 @@ generic graph on a seven-joint Panda under gravity.
 The same channels implement `AsyncControlWith`, so an `AsyncControlRhythm`
 graph switches too: each callback is awaited, and the session yields to
 sibling futures after every integration.
+
+### The hand as a gripper
+
+`device.with_gripper(["panda_finger_joint1", "panda_finger_joint2"])` makes the
+device a `roplat_behavior::Gripper`, so code written against a real hand, such
+as Franka's, drives the simulated fingers. Like a session, a gripper motion
+steps the world and returns when the fingers come to rest:
+
+- The fingers must be prismatic joints outside the controlled joints, closing
+  at zero and opening to one shared limit, with finite URDF effort limits. The
+  opening is the sum of the two positions.
+- A gear constraint (ratio −1, bounded by five times the effort limit) keeps
+  the fingers mirrored, as one drive moves both fingers of a real hand and as
+  pybullet's Panda example couples them. Without it, two force-limited fingers
+  squeezing an object offer no resistance to a push along the closing axis,
+  and a held object slides between them when the arm accelerates.
+- Both finger targets ramp at half the commanded speed. A move (`force` zero)
+  uses the effort limit and fails when it stops more than `MOVE_TOLERANCE`
+  (2 mm) short of its width, leaving the fingers holding where they stopped.
+- A grasp (`force` positive, at most the effort limit) closes all the way with
+  that force, or opens all the way for a width beyond the current opening, so
+  an object stops the fingers. It succeeds when they rest within
+  `GRASP_EPSILON` (0.01 m, libfranka's default) of the width, then keeps
+  squeezing until the next gripper command. A missed grasp is not an error:
+  `read_gripper().grasped` is zero, as on the Franka driver. `grasped` stays
+  set while the opening remains within the tolerance, so a dropped object
+  clears it.
+- `home_gripper` opens fully at `HOMING_SPEED`; `stop_gripper` holds the
+  measured finger positions and releases a grasp without stepping.
+- During a gripper motion the controlled joints keep their last motor commands;
+  after a session or joint `MoveTo` they hold their measured position. Arm and
+  hand do not move at the same time, because one device owns the world.
+
+Code that takes the arm and the gripper as two separate resources, as with
+Franka's separate arm and hand connections, needs both from one device here.
 
 Sessions run in logical time. `.realtime(true)` paces cycle starts at the
 physics timestep on the wall clock; late cycles start at once and no

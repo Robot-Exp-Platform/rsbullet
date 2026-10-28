@@ -1,0 +1,8 @@
+<?xml version="1.0"?>
+<!-- A 0.04 m, 0.1 kg cube centred on its base frame. -->
+<robot name="block">
+  <link name="block">
+    <inertial><mass value="0.1"/><inertia ixx="2.7e-5" ixy="0" ixz="0" iyy="2.7e-5" iyz="0" izz="2.7e-5"/></inertial>
+    <collision><geometry><box size="0.04 0.04 0.04"/></geometry></collision>
+  </link>
+</robot>
