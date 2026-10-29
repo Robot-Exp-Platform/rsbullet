@@ -51,6 +51,10 @@ required-features = ["roplat"]
 name = "panda_planned_pick"
 required-features = ["roplat"]
 
+[[example]]
+name = "panda_tasks"
+required-features = ["roplat"]
+
 [features]
 default = ["gui"]
 gui = ["rsbullet-core/gui", "rsbullet_sys/gui"]
