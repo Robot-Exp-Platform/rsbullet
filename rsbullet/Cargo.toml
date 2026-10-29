@@ -28,6 +28,7 @@ rsbullet_sys = { version = "0.3.3", path = "../rsbullet-sys", default-features =
 nalgebra = { version = "0.34.1" }
 roplat_behavior = "0.9.0"
 roplat_trajectory = "0.9.0"
+roplat_world = "0.9.0"
 roplat = { version = "0.6.0-rc.1", optional = true }
 anyhow = "1.0.100"
 
@@ -54,7 +55,7 @@ required-features = ["roplat"]
 [features]
 default = ["gui"]
 gui = ["rsbullet-core/gui", "rsbullet_sys/gui"]
-roplat = ["dep:roplat", "roplat_behavior/roplat", "roplat_trajectory/roplat"]
+roplat = ["dep:roplat", "roplat_behavior/roplat", "roplat_trajectory/roplat", "roplat_world/roplat"]
 dart = ["rsbullet-core/dart"]
 physx = ["rsbullet-core/physx"]
 mujoco = ["rsbullet-core/mujoco"]

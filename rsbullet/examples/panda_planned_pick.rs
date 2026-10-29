@@ -28,9 +28,7 @@ use roplat::{Completion, Execution, RoplatResult};
 use roplat_behavior::behavior::{EndPoint, JointSpace, Joints};
 use roplat_behavior::msgs::{GripperCommand, ManualClock};
 use roplat_behavior::roplat::ControlRhythm;
-use roplat_behavior::{
-    AddRobot, EntityBuilder, Gripper, JointPositionControl, MoveTo, PhysicsEngine, RobotDescription,
-};
+use roplat_behavior::{Gripper, JointPositionControl, MoveTo, RobotDescription};
 use roplat_description::{Chain, Geometry, RobotModel};
 use roplat_kinematics::{CommonStop, chain_ik};
 use roplat_scene::{CollisionCheck, PlanningScene};
@@ -38,6 +36,7 @@ use roplat_trajectory::{
     JointTrajectoryFollower, PlannerOptions, plan_joint_path, plan_waypoints_traj_via_copp,
     points_from_samples,
 };
+use roplat_world::{AddRobot, EntityBuilder, PhysicsEngine};
 use rsbullet::{
     CollisionGeometry, CollisionId, DynamicsUpdate, Mode, MultiBodyBase, MultiBodyCreateOptions,
     PhysicsClient, RsBullet, RsBulletDevice,
@@ -61,7 +60,12 @@ impl Joints<7> for Panda {
     const TORQUE_BOUND: [f64; 7] = [87.0, 87.0, 87.0, 87.0, 12.0, 12.0, 12.0];
 }
 
-impl EndPoint for Panda {}
+impl EndPoint for Panda {
+    // A model description; the simulated robot reports its pose.
+    fn get_endpoint(&self) -> roplat_behavior::Pose {
+        unreachable!("Panda describes a model and is never a robot")
+    }
+}
 
 type Device = RsBulletDevice<Panda>;
 type Control = ControlRhythm<Device, JointPositionControl<7>>;
@@ -275,8 +279,11 @@ impl Rig {
             clock,
         } = self;
         let path = planner.plan(start, goal)?;
-        let samples = plan_waypoints_traj_via_copp::<Device, 7>(&path, SPEED)?;
-        let period = Duration::from_secs_f64(<Device as roplat_behavior::Robot>::CONTROL_PERIOD);
+        let period = <Device as roplat_behavior::Robot>::CONTROL_PERIOD;
+        let limits = roplat_behavior::MotionLimits::<7>::envelope::<Panda>()
+            .scaled(SPEED)
+            .scaled_joint();
+        let samples = plan_waypoints_traj_via_copp(&path, &limits, period)?;
         let follower =
             JointTrajectoryFollower::new(points_from_samples(&samples, period), clock.clone())?
                 .with_path_tolerance([0.1; 7])

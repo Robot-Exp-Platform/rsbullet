@@ -8,9 +8,8 @@ use std::sync::{Arc, Mutex};
 use nalgebra::Isometry3;
 use roplat_behavior::behavior::{EndPoint, JointSpace, Joints};
 use roplat_behavior::msgs::GripperCommand;
-use roplat_behavior::{
-    AddRobot, EntityBuilder, Gripper, MoveTo, PhysicsEngine, RobotDescription, RobotException,
-};
+use roplat_behavior::{Gripper, MoveTo, RobotDescription, RobotException};
+use roplat_world::{AddRobot, EntityBuilder, PhysicsEngine};
 use rsbullet::{ForceFrame, GRASP_EPSILON, MOVE_TOLERANCE, Mode, RsBullet, RsBulletDevice};
 
 /// A vertical lift carrying a hand of two 0.04 m fingers (effort 20 N).
@@ -31,7 +30,12 @@ impl Joints<1> for Rig {
     const JOINT_JERK_BOUND: [f64; 1] = [20.0];
 }
 
-impl EndPoint for Rig {}
+impl EndPoint for Rig {
+    // A model description; the simulated robot reports its pose.
+    fn get_endpoint(&self) -> roplat_behavior::Pose {
+        unreachable!("Rig describes a model and is never a robot")
+    }
+}
 
 /// A 0.04 m, 0.1 kg cube.
 struct Block;

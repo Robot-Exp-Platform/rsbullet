@@ -1,7 +1,8 @@
 #![allow(dead_code)]
 
 use roplat_behavior::behavior::{EndPoint, Joints};
-use roplat_behavior::{AddRobot, EntityBuilder, Robot, RobotDescription};
+use roplat_behavior::{Robot, RobotDescription};
+use roplat_world::{AddRobot, EntityBuilder};
 use rsbullet::{Mode, RsBullet, RsBulletDevice, RsBulletRobot};
 
 /// One prismatic axis, effort 100 N and position limits of ±1 m.
@@ -22,7 +23,12 @@ impl Joints<1> for Axis {
     const JOINT_JERK_BOUND: [f64; 1] = [40.0];
 }
 
-impl EndPoint for Axis {}
+impl EndPoint for Axis {
+    // A model description; the simulated robot reports its pose.
+    fn get_endpoint(&self) -> roplat_behavior::Pose {
+        unreachable!("Axis describes a model and is never a robot")
+    }
+}
 
 pub fn load(engine: &mut RsBullet, y: f64) -> anyhow::Result<RsBulletRobot<Axis>> {
     engine

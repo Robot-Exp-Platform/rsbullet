@@ -12,10 +12,10 @@ use std::{
 };
 
 use nalgebra as na;
-use roplat_behavior::utils::*;
 use rsbullet_sys as ffi;
 
 use crate::error::{BulletError, BulletResult};
+use crate::frame::{isometry_from_frame, isometry_to_raw_parts, isometry_write_to_frame};
 use crate::mode::Mode;
 use crate::types::*;
 

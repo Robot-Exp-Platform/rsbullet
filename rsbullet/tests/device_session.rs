@@ -5,12 +5,12 @@ use std::{
     time::{Duration, Instant},
 };
 
-use roplat_behavior::behavior::JointSpace;
+use roplat_behavior::behavior::{Arm, JointSpace};
 use roplat_behavior::msgs::Clock;
 use roplat_behavior::{
     AsyncControl, Control, JointPositionControl, JointState, JointVelocityControl, MoveTo,
-    PhysicsEngine,
 };
+use roplat_world::PhysicsEngine;
 use rsbullet::{Mode, RsBullet, RsBulletDevice};
 use support::{device, load, position};
 
@@ -95,6 +95,31 @@ fn move_to_returns_after_the_motion_is_integrated() -> anyhow::Result<()> {
     assert!(device.engine().steps_completed() > 0);
     let q = position(&mut device)?;
     assert!((q - 0.4).abs() < 0.02, "q = {q}");
+    Ok(())
+}
+
+#[test]
+fn move_to_plans_with_the_motion_limits() -> anyhow::Result<()> {
+    let mut full = device()?;
+    MoveTo::<JointSpace<1>>::move_to(&mut full, [0.4])?;
+
+    let mut slow = device()?;
+    let half = Arm::<1>::motion_limits(&slow).scaled(0.5);
+    Arm::<1>::set_motion_limits(&mut slow, half)?;
+    MoveTo::<JointSpace<1>>::move_to(&mut slow, [0.4])?;
+    let (full_steps, slow_steps) = (
+        full.engine().steps_completed(),
+        slow.engine().steps_completed(),
+    );
+    assert!(slow_steps > full_steps, "{slow_steps} <= {full_steps}");
+    let q = position(&mut slow)?;
+    assert!((q - 0.4).abs() < 0.02, "q = {q}");
+
+    // Limits above the declared envelope are refused.
+    let mut loose = half;
+    loose.joint.dq_max = [2.0];
+    assert!(Arm::<1>::set_motion_limits(&mut slow, loose).is_err());
+    assert_eq!(Arm::<1>::motion_limits(&slow), half);
     Ok(())
 }
 

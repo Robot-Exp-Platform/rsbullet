@@ -5,9 +5,10 @@
 use std::time::Instant;
 
 use roplat_behavior::{
-    PhysicsEngine, RobotException, RobotResult,
+    RobotException, RobotResult,
     msgs::{GripperCommand, GripperState},
 };
+use roplat_world::PhysicsEngine;
 use rsbullet_core::{
     BulletResult, ConstraintCreateOptions, ControlModeArray, JointType, PhysicsClient,
 };

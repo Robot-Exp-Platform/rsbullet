@@ -6,9 +6,10 @@ use std::f64::consts::FRAC_PI_2;
 
 use nalgebra as na;
 use roplat_behavior::{
-    AddRobot, EntityBuilder, ForceTorqueSensor, ImuSensor, PhysicsEngine, RobotDescription,
+    ForceTorqueSensor, ImuSensor, RobotDescription,
     msgs::{FrameId, Imu, Vector3, clock},
 };
+use roplat_world::{AddRobot, EntityBuilder, PhysicsEngine};
 use rsbullet::{Mode, RsBullet};
 
 struct HangingLoad;

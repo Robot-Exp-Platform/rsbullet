@@ -2,8 +2,9 @@
 //! Physics owns integration; graph nodes sense, plan, then queue one next-step command.
 use nalgebra::{Isometry3, Translation3, UnitQuaternion};
 use roplat::{Lifecycle, Node, RoplatError};
+use roplat_behavior::RobotDescription;
 use roplat_behavior::behavior::*;
-use roplat_behavior::{AddRobot, EntityBuilder, PhysicsEngine, RobotDescription};
+use roplat_world::{AddRobot, EntityBuilder, PhysicsEngine};
 use rsbullet::{
     BulletError, CameraImageOptions, CollisionGeometry, CollisionId, ContactPoint,
     ControlModeArray, DynamicsUpdate, InverseKinematicsOptions, JointType, LoadModelFlags, Mode,

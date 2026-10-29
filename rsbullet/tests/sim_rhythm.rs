@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use roplat::RoplatResult;
-use roplat_behavior::roplat::SimulationRhythm;
+use roplat_world::SimulationRhythm;
 use rsbullet::{Mode, RsBullet, SimRhythm};
 
 #[roplat::system]

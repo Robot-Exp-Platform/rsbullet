@@ -9,7 +9,7 @@ use roplat_behavior::behavior::{Arm, EndPoint, FlangeSpace, JointSpace, Joints};
 use roplat_behavior::{
     ArmState, ArmTorqueControl, AsyncControlCallback, AsyncControlWith, ControlObservation,
     ControlStep, ControlWith, Gripper, JointPositionControl, JointState, JointVelocityControl,
-    LoadState, MoveTo, Pose, Robot, RobotException, RobotResult, TorqueControl,
+    LoadState, MotionLimits, MoveTo, Pose, Robot, RobotException, RobotResult, TorqueControl,
     msgs::{GripperCommand, GripperState},
 };
 use roplat_trajectory::path_generate;
@@ -217,7 +217,7 @@ async fn yield_now() {
 
 impl<R> Robot for RsBulletDevice<R> {
     type State = RsBulletRobotState;
-    const CONTROL_PERIOD: f64 = <RsBulletRobot<R> as Robot>::CONTROL_PERIOD;
+    const CONTROL_PERIOD: Duration = <RsBulletRobot<R> as Robot>::CONTROL_PERIOD;
 
     fn version() -> String {
         "RsBulletDevice".to_string()
@@ -352,7 +352,8 @@ where
     /// Returns once the S-curve to `target` has been integrated to its end,
     /// like a real arm's motion, unlike the queued [`RsBulletRobot`] motion.
     fn move_to(&mut self, target: [f64; N]) -> RobotResult<()> {
-        let target = clamp_position(target, R::JOINT_MIN, R::JOINT_MAX)?;
+        let planned = self.robot.planning_limits::<N>();
+        let target = clamp_position(target, planned.q_min, planned.q_max)?;
         let mut path = None;
         let mut elapsed = Duration::ZERO;
         let mut unobserved = false;
@@ -365,9 +366,9 @@ where
                 path = Some(path_generate::joint_s_curve(
                     &start,
                     &target,
-                    &R::JOINT_VEL_BOUND,
-                    &R::JOINT_ACC_BOUND,
-                    &R::JOINT_JERK_BOUND,
+                    &planned.dq_max,
+                    &planned.ddq_max,
+                    &planned.dddq_max,
                 ));
             }
             let (generate, total) = path.as_ref().expect("path planned on the first cycle");
@@ -420,10 +421,18 @@ where
     const ROTATION_VEL_BOUND: f64 = R::ROTATION_VEL_BOUND;
     const ROTATION_ACC_BOUND: f64 = R::ROTATION_ACC_BOUND;
     const ROTATION_JERK_BOUND: f64 = R::ROTATION_JERK_BOUND;
+
+    fn get_endpoint(&self) -> Pose {
+        self.robot.get_endpoint()
+    }
+
+    fn read_endpoint(&mut self) -> RobotResult<Pose> {
+        self.robot.read_endpoint()
+    }
 }
 
-/// The `with_*` setters are no-ops, as on [`RsBulletRobot`]: limits come from
-/// the robot description and the model.
+/// Motion limits are the robot's: joint [`MoveTo`] plans with them, while
+/// control sessions clamp to the declared limits.
 impl<const N: usize, R> Arm<N> for RsBulletDevice<R>
 where
     R: Joints<N> + EndPoint,
@@ -440,41 +449,11 @@ where
         Arm::<N>::get_joint(&self.robot)
     }
 
-    fn get_endpoint(&self) -> Pose {
-        Arm::<N>::get_endpoint(&self.robot)
+    fn motion_limits(&self) -> MotionLimits<N> {
+        Arm::<N>::motion_limits(&self.robot)
     }
 
-    fn with_joint_vel(self, _vel_bound: [f64; N]) -> Self {
-        self
-    }
-    fn with_joint_acc(self, _acc_bound: [f64; N]) -> Self {
-        self
-    }
-    fn with_joint_jerk(self, _jerk_bound: [f64; N]) -> Self {
-        self
-    }
-    fn with_torque(self, _torque_bound: [f64; N]) -> Self {
-        self
-    }
-    fn with_torque_dot(self, _torque_dot_bound: [f64; N]) -> Self {
-        self
-    }
-    fn with_cartesian_vel(self, _vel_bound: f64) -> Self {
-        self
-    }
-    fn with_cartesian_acc(self, _acc_bound: f64) -> Self {
-        self
-    }
-    fn with_cartesian_jerk(self, _jerk_bound: f64) -> Self {
-        self
-    }
-    fn with_rotation_vel(self, _vel_bound: f64) -> Self {
-        self
-    }
-    fn with_rotation_acc(self, _acc_bound: f64) -> Self {
-        self
-    }
-    fn with_rotation_jerk(self, _jerk_bound: f64) -> Self {
-        self
+    fn set_motion_limits(&mut self, limits: MotionLimits<N>) -> RobotResult<()> {
+        Arm::<N>::set_motion_limits(&mut self.robot, limits)
     }
 }

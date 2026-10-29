@@ -11,10 +11,8 @@ use roplat::RoplatResult;
 use roplat_behavior::behavior::{EndPoint, Joints};
 use roplat_behavior::msgs::Clock;
 use roplat_behavior::roplat::ControlRhythm;
-use roplat_behavior::{
-    AddRobot, ControlWith, EntityBuilder, JointPositionControl, JointState, PhysicsEngine, Robot,
-    RobotDescription,
-};
+use roplat_behavior::{ControlWith, JointPositionControl, JointState, Robot, RobotDescription};
+use roplat_world::{AddRobot, EntityBuilder, PhysicsEngine};
 use rsbullet::{Mode, RsBullet, RsBulletDevice};
 
 /// Joint limits from the Franka Emika Panda datasheet.
@@ -33,7 +31,12 @@ impl Joints<7> for Panda {
     const TORQUE_BOUND: [f64; 7] = [87.0, 87.0, 87.0, 87.0, 12.0, 12.0, 12.0];
 }
 
-impl EndPoint for Panda {}
+impl EndPoint for Panda {
+    // A model description; the simulated robot reports its pose.
+    fn get_endpoint(&self) -> roplat_behavior::Pose {
+        unreachable!("Panda describes a model and is never a robot")
+    }
+}
 
 const HOME: [f64; 7] = [0.0, -0.6, 0.0, -2.1, 0.0, 1.6, 0.8];
 const TARGET: [f64; 7] = [0.4, -0.3, -0.3, -1.8, 0.3, 1.9, 0.5];
