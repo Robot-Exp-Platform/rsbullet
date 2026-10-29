@@ -6,7 +6,7 @@ use std::time::Duration;
 use std::{marker::PhantomData, sync::mpsc::Sender};
 
 use anyhow::Result;
-use roplat_behavior::behavior::{Arm, EndPoint, FlangeSpace, JointSpace, Joints};
+use roplat_behavior::behavior::{Arm, EndPoint, EndPointPose, FlangeSpace, JointSpace, Joints};
 use roplat_behavior::{
     ArmState, ArmTorqueControl, ControlObservation, ControlObserver, ControlSpace, ControlStep,
     JointLimits, JointPositionControl, JointState, JointVelocityControl, LoadState, MotionLimits,
@@ -45,10 +45,11 @@ fn notify_control_observers(
 ///
 /// Fallible `Robot::read_state` and `Arm::state` return the latest successfully
 /// refreshed native state and reject a handle after engine fault/reset/drop.
-/// The infallible `Arm::get_joint` and `EndPoint::get_endpoint` conveniences
-/// cannot report validity and return their fallback values on failure; do not
-/// use them as measurement evidence. Queued motions ([`MoveTo`], [`MoveTraj`])
-/// use [`Arm::motion_limits`]; control sessions clamp to the declared limits.
+/// The infallible `Arm::get_joint` and `EndPointPose::get_endpoint`
+/// conveniences cannot report validity and return their fallback values on
+/// failure; do not use them as measurement evidence. Queued motions
+/// ([`MoveTo`], [`MoveTraj`]) use [`Arm::motion_limits`]; control sessions
+/// clamp to the declared limits.
 pub struct RsBulletRobot<R> {
     pub body_id: i32,
     pub joint_indices: Vec<i32>,
@@ -669,7 +670,9 @@ where
     const ROTATION_VEL_BOUND: f64 = R::ROTATION_VEL_BOUND;
     const ROTATION_ACC_BOUND: f64 = R::ROTATION_ACC_BOUND;
     const ROTATION_JERK_BOUND: f64 = R::ROTATION_JERK_BOUND;
+}
 
+impl<R> EndPointPose for RsBulletRobot<R> {
     fn get_endpoint(&self) -> Pose {
         self.flange_pose().unwrap_or_default()
     }

@@ -30,12 +30,7 @@ impl Joints<1> for Rig {
     const JOINT_JERK_BOUND: [f64; 1] = [20.0];
 }
 
-impl EndPoint for Rig {
-    // A model description; the simulated robot reports its pose.
-    fn get_endpoint(&self) -> roplat_behavior::Pose {
-        unreachable!("Rig describes a model and is never a robot")
-    }
-}
+impl EndPoint for Rig {}
 
 /// A 0.04 m, 0.1 kg cube.
 struct Block;

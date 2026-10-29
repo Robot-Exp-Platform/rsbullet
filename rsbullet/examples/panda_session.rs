@@ -31,12 +31,7 @@ impl Joints<7> for Panda {
     const TORQUE_BOUND: [f64; 7] = [87.0, 87.0, 87.0, 87.0, 12.0, 12.0, 12.0];
 }
 
-impl EndPoint for Panda {
-    // A model description; the simulated robot reports its pose.
-    fn get_endpoint(&self) -> roplat_behavior::Pose {
-        unreachable!("Panda describes a model and is never a robot")
-    }
-}
+impl EndPoint for Panda {}
 
 const HOME: [f64; 7] = [0.0, -0.6, 0.0, -2.1, 0.0, 1.6, 0.8];
 const TARGET: [f64; 7] = [0.4, -0.3, -0.3, -1.8, 0.3, 1.9, 0.5];

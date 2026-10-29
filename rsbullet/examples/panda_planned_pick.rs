@@ -60,12 +60,7 @@ impl Joints<7> for Panda {
     const TORQUE_BOUND: [f64; 7] = [87.0, 87.0, 87.0, 87.0, 12.0, 12.0, 12.0];
 }
 
-impl EndPoint for Panda {
-    // A model description; the simulated robot reports its pose.
-    fn get_endpoint(&self) -> roplat_behavior::Pose {
-        unreachable!("Panda describes a model and is never a robot")
-    }
-}
+impl EndPoint for Panda {}
 
 type Device = RsBulletDevice<Panda>;
 type Control = ControlRhythm<Device, JointPositionControl<7>>;

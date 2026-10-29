@@ -5,7 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use roplat_behavior::behavior::{Arm, EndPoint, FlangeSpace, JointSpace, Joints};
+use roplat_behavior::behavior::{Arm, EndPoint, EndPointPose, FlangeSpace, JointSpace, Joints};
 use roplat_behavior::{
     ArmState, ArmTorqueControl, AsyncControlCallback, AsyncControlWith, ControlObservation,
     ControlStep, ControlWith, Gripper, JointPositionControl, JointState, JointVelocityControl,
@@ -421,7 +421,9 @@ where
     const ROTATION_VEL_BOUND: f64 = R::ROTATION_VEL_BOUND;
     const ROTATION_ACC_BOUND: f64 = R::ROTATION_ACC_BOUND;
     const ROTATION_JERK_BOUND: f64 = R::ROTATION_JERK_BOUND;
+}
 
+impl<R> EndPointPose for RsBulletDevice<R> {
     fn get_endpoint(&self) -> Pose {
         self.robot.get_endpoint()
     }
