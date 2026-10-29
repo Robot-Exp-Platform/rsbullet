@@ -156,10 +156,7 @@ impl RsBullet {
                 Some(Stamped::new(Header::new(stamp, frame, seq), imu));
             Ok(())
         });
-        Ok(RsBulletImu {
-            latest,
-            world_validity: self.world_validity(),
-        })
+        Ok(RsBulletImu { latest, world_validity: self.world_validity() })
     }
 
     pub(crate) fn simulated_nanos(&self) -> Arc<AtomicI64> {
