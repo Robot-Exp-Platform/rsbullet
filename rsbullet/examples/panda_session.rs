@@ -11,10 +11,8 @@ use roplat::RoplatResult;
 use roplat_behavior::behavior::{EndPoint, Joints};
 use roplat_behavior::msgs::Clock;
 use roplat_behavior::roplat::ControlRhythm;
-use roplat_behavior::{
-    AddRobot, ControlWith, EntityBuilder, JointPositionControl, JointState, PhysicsEngine, Robot,
-    RobotDescription,
-};
+use roplat_behavior::{ControlWith, JointPositionControl, JointState, Robot, RobotDescription};
+use roplat_world::{AddRobot, EntityBuilder, PhysicsEngine};
 use rsbullet::{Mode, RsBullet, RsBulletDevice};
 
 /// Joint limits from the Franka Emika Panda datasheet.

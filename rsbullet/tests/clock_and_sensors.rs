@@ -5,9 +5,10 @@
 use std::time::Duration;
 
 use roplat_behavior::{
-    AddRobot, EntityBuilder, ForceTorqueSensor, ImuSensor, PhysicsEngine, RobotDescription,
+    ForceTorqueSensor, ImuSensor, RobotDescription,
     msgs::{Clock, FrameId},
 };
+use roplat_world::{AddRobot, EntityBuilder, PhysicsEngine};
 use rsbullet::{Mode, RsBullet};
 
 struct HangingLoad;

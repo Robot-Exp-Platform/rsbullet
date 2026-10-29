@@ -3,9 +3,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use roplat_behavior::{
-    AddRobot, EntityBuilder, JointVelocityControl, Joints, ModelFormat, PhysicsEngine, Robot,
-    RobotDescription, SimulationModel, TorqueControl,
+    JointVelocityControl, Joints, ModelFormat, Robot, RobotDescription, SimulationModel,
+    TorqueControl,
 };
+use roplat_world::{AddRobot, EntityBuilder, PhysicsEngine};
 use rsbullet::{BulletError, Mode, RsBullet};
 
 struct Axis;

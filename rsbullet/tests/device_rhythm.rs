@@ -62,7 +62,7 @@ struct BenchArm {
 
 impl Robot for BenchArm {
     type State = f64;
-    const CONTROL_PERIOD: f64 = 0.001;
+    const CONTROL_PERIOD: Duration = Duration::from_millis(1);
 
     fn version() -> String {
         "bench".into()

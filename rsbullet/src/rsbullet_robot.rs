@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::ops::ControlFlow;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -5,14 +6,14 @@ use std::time::Duration;
 use std::{marker::PhantomData, sync::mpsc::Sender};
 
 use anyhow::Result;
-use roplat_behavior::behavior::{Arm, EndPoint, FlangeSpace, JointSpace, Joints};
+use roplat_behavior::behavior::{Arm, EndPoint, EndPointPose, FlangeSpace, JointSpace, Joints};
 use roplat_behavior::{
     ArmState, ArmTorqueControl, ControlObservation, ControlObserver, ControlSpace, ControlStep,
-    JointPositionControl, JointState, JointVelocityControl, LoadState, ModelSelectionError, MoveTo,
-    MoveTraj, PhysicsEngine, Pose, Robot, RobotDescription, RobotException, RobotResult,
-    SimulationBackend, TorqueControl, behavior::*,
+    JointLimits, JointPositionControl, JointState, JointVelocityControl, LoadState, MotionLimits,
+    MoveTo, MoveTraj, Pose, Robot, RobotDescription, RobotException, RobotResult, TorqueControl,
 };
 use roplat_trajectory::path_generate;
+use roplat_world::{EntityBuilder, ModelSelectionError, PhysicsEngine, SimulationBackend};
 use rsbullet_core::{
     BulletError, BulletResult, ControlModeArray, JointType, LoadModelFlags, PhysicsClient,
     UrdfOptions,
@@ -44,10 +45,11 @@ fn notify_control_observers(
 ///
 /// Fallible `Robot::read_state` and `Arm::state` return the latest successfully
 /// refreshed native state and reject a handle after engine fault/reset/drop.
-/// The legacy infallible `Arm::get_joint` / `get_endpoint` conveniences cannot
-/// report validity and return their fallback values on failure; do not use them
-/// as measurement evidence. The `Arm::with_*` setters remain compatibility
-/// no-ops: configure the description's joint limits and explicit native motors.
+/// The infallible `Arm::get_joint` and `EndPointPose::get_endpoint`
+/// conveniences cannot report validity and return their fallback values on
+/// failure; do not use them as measurement evidence. Queued motions
+/// ([`MoveTo`], [`MoveTraj`]) use [`Arm::motion_limits`]; control sessions
+/// clamp to the declared limits.
 pub struct RsBulletRobot<R> {
     pub body_id: i32,
     pub joint_indices: Vec<i32>,
@@ -61,6 +63,10 @@ pub struct RsBulletRobot<R> {
     /// Legacy metadata only; this field does not sleep or change the physics dt.
     /// Configure `RsBullet::set_step_time` and `SimRhythm` pacing explicitly.
     pub control_period: Duration,
+    /// The `MotionLimits<N>` set through [`Arm::set_motion_limits`], or `None`
+    /// for the declared envelope. Type-erased because the handle is not
+    /// generic over the joint count.
+    motion_limits: Option<Box<dyn Any + Send + Sync>>,
     _marker: PhantomData<R>,
 }
 
@@ -69,6 +75,33 @@ impl<R> RsBulletRobot<R> {
     /// robot in a valid world; an old body ID must not address a replacement body.
     pub fn is_valid(&self) -> bool {
         self.world_validity.load(Ordering::Acquire)
+    }
+
+    /// The limits queued motions plan with: the motion limits at their scale,
+    /// or the declared envelope.
+    pub(crate) fn planning_limits<const N: usize>(&self) -> JointLimits<N>
+    where
+        R: Joints<N>,
+    {
+        self.motion_limits
+            .as_deref()
+            .and_then(|limits| limits.downcast_ref::<MotionLimits<N>>())
+            .map_or_else(R::joint_limits, MotionLimits::scaled_joint)
+    }
+
+    /// The flange pose in the latest refreshed state.
+    fn flange_pose(&self) -> RobotResult<Pose> {
+        self.ensure_valid()?;
+        let cache = self
+            .state_cache
+            .lock()
+            .map_err(|_| RobotException::NetworkError("state cache poisoned".to_string()))?;
+        let link = cache.link_state.as_ref().ok_or_else(|| {
+            RobotException::UnprocessableInstructionError(
+                "this robot has no end-effector link".into(),
+            )
+        })?;
+        Ok(link.world_link_frame.into())
     }
 
     fn ensure_valid(&self) -> RobotResult<()> {
@@ -497,6 +530,7 @@ impl<'a, R> EntityBuilder<'a> for RsBulletRobotBuilder<'a, R> {
             before_observers: control_observers(),
             after_observers: control_observers(),
             control_period: Duration::from_secs_f64(1.0 / 240.0),
+            motion_limits: None,
             _marker: PhantomData,
         };
 
@@ -555,56 +589,24 @@ where
             .unwrap_or([0.; N])
     }
 
-    fn get_endpoint(&self) -> Pose {
-        if !self.is_valid() {
-            return Pose::default();
-        }
-        self.state_cache
-            .lock()
-            .ok()
-            .map(|cache| Into::<ArmState<N>>::into(cache.clone()))
-            .and_then(|state| state.flange.meas.pose())
-            .unwrap_or_default()
+    fn motion_limits(&self) -> MotionLimits<N> {
+        self.motion_limits
+            .as_deref()
+            .and_then(|limits| limits.downcast_ref::<MotionLimits<N>>())
+            .copied()
+            .unwrap_or_else(MotionLimits::envelope::<R>)
     }
 
-    fn with_joint_vel(self, _vel_bound: [f64; N]) -> Self {
-        self
-    }
-    fn with_joint_acc(self, _acc_bound: [f64; N]) -> Self {
-        self
-    }
-    fn with_joint_jerk(self, _jerk_bound: [f64; N]) -> Self {
-        self
-    }
-    fn with_torque(self, _torque_bound: [f64; N]) -> Self {
-        self
-    }
-    fn with_torque_dot(self, _torque_dot_bound: [f64; N]) -> Self {
-        self
-    }
-    fn with_cartesian_vel(self, _vel_bound: f64) -> Self {
-        self
-    }
-    fn with_cartesian_acc(self, _acc_bound: f64) -> Self {
-        self
-    }
-    fn with_cartesian_jerk(self, _jerk_bound: f64) -> Self {
-        self
-    }
-    fn with_rotation_vel(self, _vel_bound: f64) -> Self {
-        self
-    }
-    fn with_rotation_acc(self, _acc_bound: f64) -> Self {
-        self
-    }
-    fn with_rotation_jerk(self, _jerk_bound: f64) -> Self {
-        self
+    fn set_motion_limits(&mut self, limits: MotionLimits<N>) -> RobotResult<()> {
+        limits.within(&MotionLimits::envelope::<R>())?;
+        self.motion_limits = Some(Box::new(limits));
+        Ok(())
     }
 }
 
 impl<R> Robot for RsBulletRobot<R> {
     type State = RsBulletRobotState;
-    const CONTROL_PERIOD: f64 = 1.0 / 240.0;
+    const CONTROL_PERIOD: Duration = Duration::from_nanos(1_000_000_000 / 240);
 
     fn version() -> String {
         "RsBulletRobot".to_string()
@@ -670,6 +672,16 @@ where
     const ROTATION_JERK_BOUND: f64 = R::ROTATION_JERK_BOUND;
 }
 
+impl<R> EndPointPose for RsBulletRobot<R> {
+    fn get_endpoint(&self) -> Pose {
+        self.flange_pose().unwrap_or_default()
+    }
+
+    fn read_endpoint(&mut self) -> RobotResult<Pose> {
+        self.flange_pose()
+    }
+}
+
 impl<const N: usize, R> MoveTo<JointSpace<N>> for RsBulletRobot<R>
 where
     R: Joints<N>,
@@ -677,7 +689,8 @@ where
     fn move_to(&mut self, target: [f64; N]) -> RobotResult<()> {
         self.ensure_valid()?;
         checked_joints::<N>(&self.joint_indices)?;
-        let target = clamp_position(target, R::JOINT_MIN, R::JOINT_MAX)?;
+        let planned = self.planning_limits::<N>();
+        let target = clamp_position(target, planned.q_min, planned.q_max)?;
         let body_id = self.body_id;
         let joint_indices = self.joint_indices.clone();
 
@@ -689,16 +702,16 @@ where
         let (path_generate, t_max) = path_generate::joint_s_curve(
             &state.joint.meas.q().unwrap_or([0.; N]),
             &target,
-            &R::JOINT_VEL_BOUND,
-            &R::JOINT_ACC_BOUND,
-            &R::JOINT_JERK_BOUND,
+            &planned.dq_max,
+            &planned.ddq_max,
+            &planned.dddq_max,
         );
 
         let mut duration = Duration::from_secs(0);
         self.enqueue(move |client, dt| {
             duration += dt;
             let target = path_generate(duration);
-            let limits = joint_effort_limits::<R, N>(client, body_id, &joint_indices)?;
+            let limits = joint_effort_limits(client, body_id, &joint_indices, planned.tau_max)?;
             client.set_joint_motor_control_array(
                 body_id,
                 checked_joints::<N>(&joint_indices)?,
@@ -734,12 +747,13 @@ where
         checked_joints::<N>(&self.joint_indices)?;
         let body_id = self.body_id;
         let joint_indices = self.joint_indices.clone();
+        let planned = self.planning_limits::<N>();
         let mut path = path.into_iter();
 
         self.enqueue(move |client, _| match path.next() {
             Some(joint) => {
-                let joint = clamp_position(joint, R::JOINT_MIN, R::JOINT_MAX)?;
-                let limits = joint_effort_limits::<R, N>(client, body_id, &joint_indices)?;
+                let joint = clamp_position(joint, planned.q_min, planned.q_max)?;
+                let limits = joint_effort_limits(client, body_id, &joint_indices, planned.tau_max)?;
                 client.set_joint_motor_control_array(
                     body_id,
                     checked_joints::<N>(&joint_indices)?,
@@ -848,27 +862,28 @@ fn checked_joints<const N: usize>(joint_indices: &[i32]) -> BulletResult<&[i32]>
     Ok(&joint_indices[..N])
 }
 
-/// Intersect declared actuator limits with finite positive URDF effort limits.
-/// A missing URDF limit requires an explicit usable description limit; `f64::MAX`
-/// is roplat_behavior's unspecified default, not a physically meaningful effort.
-fn joint_effort_limits<R: Joints<N>, const N: usize>(
+/// Intersect the effort bounds `tau_max` with finite positive URDF effort
+/// limits. An unbounded (infinite) entry needs a URDF limit, since Bullet's
+/// motors take a finite force.
+fn joint_effort_limits<const N: usize>(
     client: &mut PhysicsClient,
     body_id: i32,
     joint_indices: &[i32],
+    tau_max: [f64; N],
 ) -> BulletResult<[f64; N]> {
     let joints = checked_joints::<N>(joint_indices)?;
-    let mut limits = R::TORQUE_BOUND;
+    let mut limits = tau_max;
     for (index, &joint) in joints.iter().enumerate() {
         let declared = limits[index];
-        if !declared.is_finite() || declared < 0.0 {
+        if declared.is_nan() || declared < 0.0 {
             return Err(bullet_error(
-                "declared joint effort limits must be finite and nonnegative",
+                "declared joint effort limits must be nonnegative",
             ));
         }
         let native = client.get_joint_info(body_id, joint)?.max_force;
         limits[index] = if native.is_finite() && native > 0.0 {
             declared.min(native)
-        } else if declared < f64::MAX {
+        } else if declared.is_finite() {
             declared
         } else {
             return Err(bullet_error(
@@ -916,32 +931,29 @@ fn read_arm_state<const N: usize>(
     Ok(read_robot_state(client, body_id, joint_indices, end_effector_link, cache)?.into())
 }
 
+/// An infinite limit leaves its value as it is.
 fn clamp_by<const N: usize>(mut values: [f64; N], limit: [f64; N]) -> BulletResult<[f64; N]> {
     for i in 0..N {
-        if !values[i].is_finite() || !limit[i].is_finite() || limit[i] < 0.0 {
+        if !values[i].is_finite() || limit[i].is_nan() || limit[i] < 0.0 {
             return Err(bullet_error(
-                "joint commands and nonnegative limits must be finite",
+                "joint commands must be finite and limits nonnegative",
             ));
         }
-        let bound = limit[i].abs();
-        values[i] = values[i].clamp(-bound, bound);
+        values[i] = values[i].clamp(-limit[i], limit[i]);
     }
     Ok(values)
 }
 
+/// An infinite bound leaves its side unclamped.
 pub(crate) fn clamp_position<const N: usize>(
     mut values: [f64; N],
     lower: [f64; N],
     upper: [f64; N],
 ) -> BulletResult<[f64; N]> {
     for i in 0..N {
-        if !values[i].is_finite()
-            || !lower[i].is_finite()
-            || !upper[i].is_finite()
-            || lower[i] > upper[i]
-        {
+        if !values[i].is_finite() || lower[i].is_nan() || upper[i].is_nan() || lower[i] > upper[i] {
             return Err(bullet_error(
-                "joint positions and ordered limits must be finite",
+                "joint positions must be finite and limits ordered",
             ));
         }
         values[i] = values[i].clamp(lower[i], upper[i]);
@@ -979,8 +991,9 @@ fn hold_measured_position<R: Joints<N>, const N: usize>(
         ));
     }
     let measured = std::array::from_fn(|i| states[i].position);
-    let target = clamp_position(measured, R::JOINT_MIN, R::JOINT_MAX)?;
-    let limits = joint_effort_limits::<R, N>(client, body_id, joint_indices)?;
+    let declared = R::joint_limits();
+    let target = clamp_position(measured, declared.q_min, declared.q_max)?;
+    let limits = joint_effort_limits(client, body_id, joint_indices, declared.tau_max)?;
     client.set_joint_motor_control_array(
         body_id,
         joints,
@@ -1017,8 +1030,9 @@ where
         command: [f64; N],
     ) -> BulletResult<()> {
         let joints = checked_joints::<N>(joint_indices)?;
-        let command = clamp_position(command, R::JOINT_MIN, R::JOINT_MAX)?;
-        let limits = joint_effort_limits::<R, N>(client, body_id, joint_indices)?;
+        let declared = R::joint_limits();
+        let command = clamp_position(command, declared.q_min, declared.q_max)?;
+        let limits = joint_effort_limits(client, body_id, joint_indices, declared.tau_max)?;
         client.set_joint_motor_control_array(
             body_id,
             joints,
@@ -1064,8 +1078,9 @@ where
         command: [f64; N],
     ) -> BulletResult<()> {
         let joints = checked_joints::<N>(joint_indices)?;
-        let command = clamp_by(command, R::JOINT_VEL_BOUND)?;
-        let limits = joint_effort_limits::<R, N>(client, body_id, joint_indices)?;
+        let declared = R::joint_limits();
+        let command = clamp_by(command, declared.dq_max)?;
+        let limits = joint_effort_limits(client, body_id, joint_indices, declared.tau_max)?;
         client.set_joint_motor_control_array(
             body_id,
             joints,
@@ -1119,7 +1134,8 @@ where
         command: [f64; N],
     ) -> BulletResult<()> {
         let joints = checked_joints::<N>(joint_indices)?;
-        let limits = joint_effort_limits::<R, N>(client, body_id, joint_indices)?;
+        let limits =
+            joint_effort_limits(client, body_id, joint_indices, R::joint_limits().tau_max)?;
         let command = clamp_by(command, limits)?;
         client.set_joint_motor_control_array(
             body_id,
@@ -1173,7 +1189,8 @@ where
         command: [f64; N],
     ) -> BulletResult<()> {
         let joints = checked_joints::<N>(joint_indices)?;
-        let limits = joint_effort_limits::<R, N>(client, body_id, joint_indices)?;
+        let limits =
+            joint_effort_limits(client, body_id, joint_indices, R::joint_limits().tau_max)?;
         let command = clamp_by(command, limits)?;
         client.set_joint_motor_control_array(
             body_id,

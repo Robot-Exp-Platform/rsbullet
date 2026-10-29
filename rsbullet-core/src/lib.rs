@@ -1,5 +1,6 @@
 mod client;
 mod error;
+mod frame;
 mod mode;
 mod types;
 

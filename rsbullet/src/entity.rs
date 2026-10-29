@@ -1,5 +1,5 @@
 use anyhow::Ok;
-use roplat_behavior::{Collision, Entity, Visual};
+use roplat_world::{Collision, Entity, Visual};
 use rsbullet_core::{CollisionId, MultiBodyBase, MultiBodyCreateOptions, VisualId};
 
 use crate::RsBullet;
@@ -45,7 +45,7 @@ impl<'a> EntityBuilder<'a, VisualMarker> {
     }
 }
 
-impl<'a> roplat_behavior::EntityBuilder<'a> for EntityBuilder<'a, CollisionMarker> {
+impl<'a> roplat_world::EntityBuilder<'a> for EntityBuilder<'a, CollisionMarker> {
     type Entity = CollisionId;
     fn name(mut self, _name: String) -> Self {
         self.name = Some(_name);
@@ -86,7 +86,7 @@ impl<'a> roplat_behavior::EntityBuilder<'a> for EntityBuilder<'a, CollisionMarke
     }
 }
 
-impl<'a> roplat_behavior::EntityBuilder<'a> for EntityBuilder<'a, VisualMarker> {
+impl<'a> roplat_world::EntityBuilder<'a> for EntityBuilder<'a, VisualMarker> {
     type Entity = VisualId;
     fn name(mut self, _name: String) -> Self {
         self.name = Some(_name);

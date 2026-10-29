@@ -1,7 +1,8 @@
 #![allow(dead_code)]
 
 use roplat_behavior::behavior::{EndPoint, Joints};
-use roplat_behavior::{AddRobot, EntityBuilder, Robot, RobotDescription};
+use roplat_behavior::{Robot, RobotDescription};
+use roplat_world::{AddRobot, EntityBuilder};
 use rsbullet::{Mode, RsBullet, RsBulletDevice, RsBulletRobot};
 
 /// One prismatic axis, effort 100 N and position limits of ±1 m.

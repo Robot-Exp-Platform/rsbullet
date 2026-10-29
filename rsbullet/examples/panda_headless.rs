@@ -10,7 +10,8 @@ use std::{
 };
 
 use nalgebra::{Isometry3, Translation3, UnitQuaternion};
-use roplat_behavior::PhysicsEngine;
+
+use roplat_world::PhysicsEngine;
 use rsbullet::{
     ControlModeArray, InverseKinematicsOptions, JointType, Mode, RsBullet, UrdfOptions,
 };

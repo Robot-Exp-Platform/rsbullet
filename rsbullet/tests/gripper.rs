@@ -8,9 +8,8 @@ use std::sync::{Arc, Mutex};
 use nalgebra::Isometry3;
 use roplat_behavior::behavior::{EndPoint, JointSpace, Joints};
 use roplat_behavior::msgs::GripperCommand;
-use roplat_behavior::{
-    AddRobot, EntityBuilder, Gripper, MoveTo, PhysicsEngine, RobotDescription, RobotException,
-};
+use roplat_behavior::{Gripper, MoveTo, RobotDescription, RobotException};
+use roplat_world::{AddRobot, EntityBuilder, PhysicsEngine};
 use rsbullet::{ForceFrame, GRASP_EPSILON, MOVE_TOLERANCE, Mode, RsBullet, RsBulletDevice};
 
 /// A vertical lift carrying a hand of two 0.04 m fingers (effort 20 N).
