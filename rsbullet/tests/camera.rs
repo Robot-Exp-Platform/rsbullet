@@ -82,29 +82,39 @@ fn back_projected_points_land_on_the_block_and_the_slab() {
     let spec = looking_down();
     let frame = sim.render_rgbd(&spec).unwrap().value;
     let points = depth_to_points(&frame.depth, &spec.info(), spec.near..=spec.far, 1);
+    // At 0.99 m the view spans about 1.54 m x 1.15 m; the 1 m slab fills
+    // about 57 % of it, and the rest sees nothing (no point).
+    let hit = points.len() as f64 / (64.0 * 48.0);
     assert!(
-        points.len() > 64 * 48 * 9 / 10,
-        "{} of {} pixels hit",
-        points.len(),
-        64 * 48
+        (0.45..0.7).contains(&hit),
+        "{:.0} % of pixels hit",
+        hit * 100.0
     );
     let world: Vec<Point3<f64>> = points
         .iter()
         .map(|p| spec.pose * Point3::new(p[0], p[1], p[2]))
         .collect();
-    // Points over the block's footprint are on its top, the rest on the slab.
+    // Every point is on the slab (z = 0.01), on the block's top (z = 0.21,
+    // within its footprint), or on one of its sides (seen in perspective,
+    // within 2 cm of a side face, between the slab and the top).
+    let mut on_top = 0;
     for p in &world {
-        let over_block = (p.x - 0.25).abs() < 0.09 && p.y.abs() < 0.09;
-        let expected = if over_block { 0.21 } else { 0.01 };
-        let on_side = (p.x - 0.25).abs() < 0.11 && p.y.abs() < 0.11;
-        if on_side && !over_block {
-            continue; // the block's edges: either height
-        }
         assert!(
-            (p.z - expected).abs() < 0.02,
-            "point {p:?} expected at z = {expected}"
+            p.x.abs() < 0.52 && p.y.abs() < 0.52,
+            "point {p:?} off the slab"
         );
+        let (dx, dy) = ((p.x - 0.25).abs(), p.y.abs());
+        let slab = (p.z - 0.01).abs() < 0.02;
+        let top = (p.z - 0.21).abs() < 0.02 && dx < 0.11 && dy < 0.11;
+        let side = (0.0..0.23).contains(&p.z) && dx < 0.12 && dy < 0.12 && (dx > 0.08 || dy > 0.08);
+        assert!(
+            slab || top || side,
+            "point {p:?} is on neither the slab nor the block"
+        );
+        on_top += usize::from(top);
     }
+    // The block's 0.2 m top at 0.79 m covers about (0.2 * 41.6 / 0.79)^2 px.
+    assert!(on_top > 80, "{on_top} points on the block's top");
 }
 
 #[test]

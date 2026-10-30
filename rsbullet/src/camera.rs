@@ -9,6 +9,9 @@ use rsbullet_core::{BulletResult, CameraImageOptions, PhysicsClient, Renderer};
 
 use crate::RsBullet;
 
+/// Normalised depth this close to 1 is the far plane: no hit.
+const NO_HIT: f64 = 1e-6;
+
 /// Where a simulated camera is and what it sees: a pinhole camera rendered
 /// by Bullet's software renderer, which also works without a display
 /// ([`Mode::Direct`](crate::Mode::Direct)).
@@ -55,7 +58,7 @@ pub struct RgbdFrame {
     /// Four bytes per pixel.
     pub rgba: Vec<u8>,
     /// Distance along the view axis (m); infinite where nothing was hit
-    /// before `far`.
+    /// before `far` (a surface at the far plane itself counts as no hit).
     pub depth: Vec<f32>,
 }
 
@@ -138,13 +141,15 @@ fn render(client: &mut PhysicsClient, spec: &CameraSpec) -> BulletResult<RgbdFra
     };
     let image = client.get_camera_image(&options)?;
     let (near, far) = (spec.near, spec.far);
-    // The depth buffer holds normalised device depth in [0, 1]; 1 is the
-    // far plane, where nothing was hit.
+    // The depth buffer holds normalised device depth in [0, 1]. Where
+    // nothing was hit it is the far plane, 1, which the software renderer
+    // returns as a float32 a step or two below 1: anything that close to
+    // the far plane is no hit.
     let depth = image
         .depth
         .iter()
         .map(|&d| {
-            if d >= 1.0 {
+            if f64::from(d) >= 1.0 - NO_HIT {
                 f32::INFINITY
             } else {
                 (far * near / (far - (far - near) * f64::from(d))) as f32
