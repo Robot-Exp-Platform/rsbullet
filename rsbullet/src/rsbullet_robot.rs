@@ -8,15 +8,16 @@ use std::{marker::PhantomData, sync::mpsc::Sender};
 use anyhow::Result;
 use roplat_behavior::behavior::{Arm, EndPoint, EndPointPose, FlangeSpace, JointSpace, Joints};
 use roplat_behavior::{
-    ArmState, ArmTorqueControl, ControlObservation, ControlObserver, ControlSpace, ControlStep,
-    JointLimits, JointPositionControl, JointState, JointVelocityControl, LoadState, MotionLimits,
-    MoveTo, MoveTraj, Pose, Robot, RobotDescription, RobotException, RobotResult, TorqueControl,
+    ArmState, ArmTorqueControl, CartesianPoseControl, ControlObservation, ControlObserver,
+    ControlSpace, ControlStep, JointLimits, JointPositionControl, JointState, JointVelocityControl,
+    LoadState, MotionLimits, MoveTo, MoveTraj, Pose, Robot, RobotDescription, RobotException,
+    RobotResult, TorqueControl,
 };
 use roplat_trajectory::path_generate;
 use roplat_world::{EntityBuilder, ModelSelectionError, PhysicsEngine, SimulationBackend};
 use rsbullet_core::{
-    BulletError, BulletResult, ControlModeArray, JointType, LoadModelFlags, PhysicsClient,
-    UrdfOptions,
+    BulletError, BulletResult, ControlModeArray, InverseKinematicsOptions, JointType,
+    LoadModelFlags, PhysicsClient, UrdfOptions,
 };
 
 use crate::RsBullet;
@@ -258,10 +259,11 @@ impl<'a, R, S: RsBulletControlSpace<R>> Session<'a, R, S> {
         let ControlFlow::Continue((command, done)) = step else {
             return Ok(false);
         };
-        S::apply(
+        S::apply_at(
             self.engine.client_mut(),
             self.robot.body_id,
             &self.joint_indices,
+            self.robot.end_effector_link,
             command,
         )?;
         self.engine.step()?;
@@ -835,6 +837,19 @@ pub trait RsBulletControlSpace<R>: ControlSpace<RsBulletRobot<R>> {
         command: Self::Command,
     ) -> BulletResult<()>;
 
+    /// [`apply`](Self::apply) for a channel that commands the end-effector
+    /// link, such as the Cartesian pose channel; a joint channel ignores the
+    /// link, as this default does.
+    fn apply_at(
+        client: &mut PhysicsClient,
+        body_id: i32,
+        joint_indices: &[i32],
+        _end_effector_link: i32,
+        command: Self::Command,
+    ) -> BulletResult<()> {
+        Self::apply(client, body_id, joint_indices, command)
+    }
+
     /// Leave the joints in a resting mode when a blocking session ends. The
     /// built-in channels hold the measured joint position.
     fn release(
@@ -1191,6 +1206,102 @@ where
             joints,
             ControlModeArray::Torque(&command),
             None,
+        )
+    }
+
+    fn release(
+        client: &mut PhysicsClient,
+        body_id: i32,
+        joint_indices: &[i32],
+    ) -> BulletResult<()> {
+        hold_measured_position::<R, N>(client, body_id, joint_indices)
+    }
+}
+
+/// The flange (end-effector link) pose in the world, reached each cycle by
+/// Bullet's inverse kinematics from the measured joints and then commanded
+/// on the position motors, as [`JointPositionControl`] does. The pose is in
+/// the frame of `ArmState::flange`, the world; with the robot's base at the
+/// world origin that is also the base frame.
+impl<R, const N: usize> RsBulletControlSpace<R> for CartesianPoseControl<N>
+where
+    R: Joints<N>,
+{
+    fn observe(
+        client: &mut PhysicsClient,
+        body_id: i32,
+        joint_indices: &[i32],
+        end_effector_link: i32,
+        state_cache: &Arc<Mutex<RsBulletRobotState>>,
+    ) -> BulletResult<ArmState<N>> {
+        read_arm_state::<N>(
+            client,
+            body_id,
+            joint_indices,
+            end_effector_link,
+            state_cache,
+        )
+    }
+
+    fn apply(
+        _client: &mut PhysicsClient,
+        _body_id: i32,
+        _joint_indices: &[i32],
+        _command: Pose,
+    ) -> BulletResult<()> {
+        Err(bullet_error(
+            "the Cartesian pose channel needs the end-effector link",
+        ))
+    }
+
+    fn apply_at(
+        client: &mut PhysicsClient,
+        body_id: i32,
+        joint_indices: &[i32],
+        end_effector_link: i32,
+        command: Pose,
+    ) -> BulletResult<()> {
+        if end_effector_link < 0 {
+            return Err(bullet_error(
+                "the Cartesian pose channel needs an end-effector link",
+            ));
+        }
+        let joints = checked_joints::<N>(joint_indices)?;
+        // Bullet's solution lists the movable joints in index order; seed it
+        // with where they are.
+        let mut slot = Vec::new();
+        let mut seed = Vec::new();
+        for joint in 0..client.get_num_joints(body_id) {
+            if client.get_joint_info(body_id, joint)?.joint_type == JointType::Fixed {
+                slot.push(None);
+            } else {
+                slot.push(Some(seed.len()));
+                seed.push(client.get_joint_state(body_id, joint)?.position);
+            }
+        }
+        let target: nalgebra::Isometry3<f64> = command.into();
+        let options = InverseKinematicsOptions {
+            current_positions: Some(&seed),
+            max_iterations: Some(100),
+            residual_threshold: Some(1e-6),
+            ..Default::default()
+        };
+        let solution =
+            client.calculate_inverse_kinematics(body_id, end_effector_link, target, &options)?;
+        let mut q = [0.0; N];
+        for (value, &joint) in q.iter_mut().zip(joints) {
+            *value = slot
+                .get(joint as usize)
+                .copied()
+                .flatten()
+                .and_then(|k| solution.get(k).copied())
+                .ok_or_else(|| bullet_error("a controlled joint is not movable"))?;
+        }
+        <JointPositionControl<N> as RsBulletControlSpace<R>>::apply(
+            client,
+            body_id,
+            joint_indices,
+            q,
         )
     }
 
