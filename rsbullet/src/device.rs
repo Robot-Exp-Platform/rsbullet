@@ -55,12 +55,7 @@ impl<R> RsBulletDevice<R> {
                 "a simulated device needs a valid robot loaded into its own world".into(),
             ));
         }
-        Ok(Self {
-            engine,
-            robot,
-            realtime: false,
-            gripper: None,
-        })
+        Ok(Self { engine, robot, realtime: false, gripper: None })
     }
 
     /// Pace control cycles at the physics timestep on the wall clock. A late

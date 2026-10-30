@@ -47,11 +47,7 @@ const FINGERS: [&str; 2] = ["finger_left", "finger_right"];
 const ON_TABLE: f64 = 0.26;
 
 fn command(width: f64, force: f64) -> GripperCommand {
-    GripperCommand {
-        width,
-        speed: 0.1,
-        force,
-    }
+    GripperCommand { width, speed: 0.1, force }
 }
 
 /// The rig under gravity with its fingers above a table, before any hand.
@@ -259,16 +255,8 @@ fn commands_outside_the_hand_are_refused_without_stepping() -> anyhow::Result<()
         command(0.09, 0.0),
         command(-0.01, 0.0),
         command(f64::NAN, 0.0),
-        GripperCommand {
-            width: 0.04,
-            speed: 0.0,
-            force: 0.0,
-        },
-        GripperCommand {
-            width: 0.04,
-            speed: f64::NAN,
-            force: 0.0,
-        },
+        GripperCommand { width: 0.04, speed: 0.0, force: 0.0 },
+        GripperCommand { width: 0.04, speed: f64::NAN, force: 0.0 },
         command(0.04, 25.0),
         command(0.04, -1.0),
     ] {

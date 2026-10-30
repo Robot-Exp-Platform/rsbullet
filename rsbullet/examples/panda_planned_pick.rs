@@ -152,9 +152,7 @@ impl Planner {
         let mut scene = PlanningScene::new(model, ARM, |name| {
             dir.join(name.trim_start_matches("package://"))
         })?;
-        let block = |half: [f64; 3]| Geometry::Box {
-            size: half.map(|h| 2.0 * h),
-        };
+        let block = |half: [f64; 3]| Geometry::Box { size: half.map(|h| 2.0 * h) };
         let at = |[x, y, z]: [f64; 3]| Isometry3::translation(x, y, z);
         scene.add_object("table", &block(TABLE_HALF), at(TABLE_AT))?;
         scene.add_object("wall", &block(WALL_HALF), at(WALL_AT))?;
@@ -202,11 +200,8 @@ impl Planner {
 
     /// A path from `start` to `goal` that is free in the scene as it is now.
     fn plan(&self, start: [f64; 7], goal: [f64; 7]) -> anyhow::Result<Vec<[f64; 7]>> {
-        let options = PlannerOptions {
-            max_iterations: 20_000,
-            seed: 20261028,
-            ..Default::default()
-        };
+        let options =
+            PlannerOptions { max_iterations: 20_000, seed: 20261028, ..Default::default() };
         plan_joint_path(
             start,
             goal,
@@ -268,11 +263,7 @@ impl Rig {
         planner: &Planner,
         [start, goal]: [[f64; 7]; 2],
     ) -> anyhow::Result<Self> {
-        let Self {
-            arm,
-            control,
-            clock,
-        } = self;
+        let Self { arm, control, clock } = self;
         let path = planner.plan(start, goal)?;
         let period = <Device as roplat_behavior::Robot>::CONTROL_PERIOD;
         let limits = roplat_behavior::MotionLimits::<7>::envelope::<Panda>()
@@ -296,11 +287,7 @@ impl Rig {
             duration.as_secs_f64(),
             arm.engine().simulated_time().as_secs_f64(),
         );
-        Ok(Self {
-            arm,
-            control,
-            clock,
-        })
+        Ok(Self { arm, control, clock })
     }
 }
 
@@ -341,11 +328,7 @@ async fn main() -> anyhow::Result<()> {
     let open = 0.04;
     planner.fingers(open)?;
 
-    let mut rig = Rig {
-        arm,
-        control: Control::new(),
-        clock,
-    };
+    let mut rig = Rig { arm, control: Control::new(), clock };
     rig = rig.run("approach", &planner, [HOME, above_pick]).await?;
     // The open fingers straddle the cube on the way down.
     for finger in FINGER_LINKS {
@@ -353,11 +336,8 @@ async fn main() -> anyhow::Result<()> {
     }
     rig = rig.run("descend", &planner, [above_pick, at_pick]).await?;
 
-    rig.arm.move_gripper(GripperCommand {
-        width: CUBE,
-        speed: 0.05,
-        force: 15.0,
-    })?;
+    rig.arm
+        .move_gripper(GripperCommand { width: CUBE, speed: 0.05, force: 15.0 })?;
     let grip = rig.arm.read_gripper()?;
     anyhow::ensure!(grip.grasped == 1, "the grasp failed: {grip:?}");
     println!("grasped   width {:.4} m", grip.width);
@@ -388,11 +368,8 @@ async fn main() -> anyhow::Result<()> {
     planner.scene.allowed_mut().allow("cube", "table");
     rig = rig.run("lower", &planner, [above_place, at_place]).await?;
 
-    rig.arm.move_gripper(GripperCommand {
-        width: 0.08,
-        speed: 0.05,
-        force: 0.0,
-    })?;
+    rig.arm
+        .move_gripper(GripperCommand { width: 0.08, speed: 0.05, force: 0.0 })?;
     planner.scene.detach("cube", &at_place)?;
     planner.fingers(open)?;
     let Rig { mut arm, .. } = rig

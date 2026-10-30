@@ -1,3 +1,4 @@
+mod camera;
 mod device;
 mod entity;
 mod gripper;
@@ -8,6 +9,7 @@ mod sensor;
 mod sim_rhythm;
 pub mod types;
 
+pub use camera::{CameraSpec, RgbdFrame, RsBulletCamera};
 pub use device::*;
 pub use entity::*;
 pub use gripper::{GRASP_EPSILON, HOMING_SPEED, MOVE_TOLERANCE};

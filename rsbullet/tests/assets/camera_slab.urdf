@@ -1,0 +1,8 @@
+<?xml version="1.0"?>
+<!-- A 1 m x 1 m slab, 0.02 m thick, centred on its base frame; seen by the camera tests. -->
+<robot name="camera_slab">
+  <link name="slab">
+    <visual><geometry><box size="1.0 1.0 0.02"/></geometry></visual>
+    <collision><geometry><box size="1.0 1.0 0.02"/></geometry></collision>
+  </link>
+</robot>
