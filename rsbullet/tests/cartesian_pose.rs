@@ -49,15 +49,7 @@ const ARM: [&str; 7] = [
 ];
 const HOME: [f64; 7] = [0.0, -0.6, 0.0, -2.1, 0.0, 1.6, 0.8];
 
-/// Bullet caches OBJ meshes in one process-wide map without a lock
-/// (`gCachedObjResults` in `LoadMeshFromObj.cpp`), so loading the Panda's
-/// meshes in two worlds at once can crash; the tests load one at a time.
-static LOADING: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
 fn device() -> Device {
-    let _turn = LOADING
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let mut world = RsBullet::new(Mode::Direct).unwrap();
     world.set_gravity([0.0, 0.0, -9.81]).unwrap();
     world.client.set_additional_search_path(PANDA_DATA).unwrap();
