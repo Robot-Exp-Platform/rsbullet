@@ -42,10 +42,7 @@ fn main() -> anyhow::Result<()> {
     sim.client.load_urdf("plane.urdf", None::<()>)?;
     let body = sim.client.load_urdf(
         "franka_panda/panda.urdf",
-        Some(UrdfOptions {
-            use_fixed_base: true,
-            ..Default::default()
-        }),
+        Some(UrdfOptions { use_fixed_base: true, ..Default::default() }),
     )?;
     let mut arm = Vec::new();
     let mut fingers = Vec::new();

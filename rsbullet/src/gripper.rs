@@ -166,11 +166,7 @@ impl ParallelFingers {
         realtime: bool,
         command: GripperCommand,
     ) -> RobotResult<()> {
-        let GripperCommand {
-            width,
-            speed,
-            force,
-        } = command;
+        let GripperCommand { width, speed, force } = command;
         let width = up_to(width, self.max_width()).ok_or_else(|| {
             invalid(format!(
                 "gripper width {width} is outside [0, {}]",
@@ -230,11 +226,7 @@ impl ParallelFingers {
     }
 
     pub(crate) fn home(&mut self, engine: &mut RsBullet, realtime: bool) -> RobotResult<()> {
-        let open = GripperCommand {
-            width: self.max_width(),
-            speed: HOMING_SPEED,
-            force: 0.0,
-        };
+        let open = GripperCommand { width: self.max_width(), speed: HOMING_SPEED, force: 0.0 };
         self.command(engine, realtime, open)
     }
 

@@ -508,10 +508,7 @@ impl<'a, R> EntityBuilder<'a> for RsBulletRobotBuilder<'a, R> {
                 return Err(error);
             }
         };
-        let state_cache = Arc::new(Mutex::new(RsBulletRobotState {
-            joint_states,
-            link_state,
-        }));
+        let state_cache = Arc::new(Mutex::new(RsBulletRobotState { joint_states, link_state }));
 
         let cache_clone = state_cache.clone();
         let joint_indices_clone = joint_indices.clone();
@@ -907,10 +904,7 @@ fn read_robot_state(
     } else {
         None
     };
-    let state = RsBulletRobotState {
-        joint_states,
-        link_state,
-    };
+    let state = RsBulletRobotState { joint_states, link_state };
 
     let mut cache = state_cache
         .lock()

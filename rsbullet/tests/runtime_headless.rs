@@ -152,10 +152,7 @@ fn failed_control_does_not_integrate_and_reset_invalidates_old_handles() -> anyh
         .base_fixed(true)
         .load()?;
     robot.enqueue(|_, _| {
-        Err(BulletError::CommandFailed {
-            message: "injected control failure",
-            code: 42,
-        })
+        Err(BulletError::CommandFailed { message: "injected control failure", code: 42 })
     })?;
     assert!(
         engine
@@ -198,10 +195,7 @@ fn dropping_engine_invalidates_robot_state_and_commands() -> anyhow::Result<()> 
 fn observer_failure_counts_completed_integration_and_requires_reset() -> anyhow::Result<()> {
     let mut engine = RsBullet::new(Mode::Direct)?;
     engine.add_step_observer(|_| {
-        Err(BulletError::CommandFailed {
-            message: "injected observer failure",
-            code: 43,
-        })
+        Err(BulletError::CommandFailed { message: "injected observer failure", code: 43 })
     });
     assert!(
         engine

@@ -249,11 +249,7 @@ impl Node for Planner {
             ),
             _ => ("final_settle", high_goal, 0.04),
         };
-        Command {
-            phase,
-            target,
-            finger_position,
-        }
+        Command { phase, target, finger_position }
     }
 }
 
@@ -342,18 +338,9 @@ async fn pick_and_place(
     initial_ee: [f64; 3],
     fingers: [i32; 2],
 ) -> roplat::RoplatResult<SimRhythm<RsBullet>> {
-    let mut sense = Sense {
-        evidence: evidence.clone(),
-    };
-    let mut path = Planner {
-        grasp: config.start,
-        config,
-        origin: initial_ee,
-    };
-    let mut command = Actuate {
-        evidence,
-        finger_joints: fingers,
-    };
+    let mut sense = Sense { evidence: evidence.clone() };
+    let mut path = Planner { grasp: config.start, config, origin: initial_ee };
+    let mut command = Actuate { evidence, finger_joints: fingers };
     simulation >> {
         &mut robot >> sense.resources.0;
         sense? >> path;
@@ -519,11 +506,7 @@ fn prepare(config: &Config, assets: &str, started: Instant) -> anyhow::Result<Pr
         .vector
         .into();
     let evidence = Arc::new(Mutex::new(Evidence {
-        active_command: Command {
-            phase: "initial",
-            target: initial_ee,
-            finger_position: 0.04,
-        },
+        active_command: Command { phase: "initial", target: initial_ee, finger_position: 0.04 },
         frames: Vec::with_capacity(config.steps as usize),
         snapshots: Vec::new(),
         world: serde_json::json!({

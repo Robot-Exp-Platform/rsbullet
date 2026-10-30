@@ -48,10 +48,7 @@ fn bullet_never_finds_links_closer_than_the_scene() {
     let panda = client
         .load_urdf(
             dir.join("panda.urdf"),
-            Some(UrdfOptions {
-                use_fixed_base: true,
-                ..Default::default()
-            }),
+            Some(UrdfOptions { use_fixed_base: true, ..Default::default() }),
         )
         .unwrap();
     // Bullet's link index of each link name, and joint index of each joint.
