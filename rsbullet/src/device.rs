@@ -7,9 +7,10 @@ use std::{
 
 use roplat_behavior::behavior::{Arm, EndPoint, EndPointPose, FlangeSpace, JointSpace, Joints};
 use roplat_behavior::{
-    ArmState, ArmTorqueControl, AsyncControlCallback, AsyncControlWith, ControlObservation,
-    ControlStep, ControlWith, Gripper, JointPositionControl, JointState, JointVelocityControl,
-    LoadState, MotionLimits, MoveTo, Pose, Robot, RobotException, RobotResult, TorqueControl,
+    ArmState, ArmTorqueControl, AsyncControlCallback, AsyncControlWith, CartesianPoseControl,
+    ControlObservation, ControlStep, ControlWith, Gripper, JointPositionControl, JointState,
+    JointVelocityControl, LoadState, MotionLimits, MoveTo, Pose, Robot, RobotException,
+    RobotResult, TorqueControl,
     msgs::{GripperCommand, GripperState},
 };
 use roplat_trajectory::path_generate;
@@ -306,6 +307,46 @@ control_channel!(JointPositionControl, JointState, hold_joint_position);
 control_channel!(JointVelocityControl, JointState, hold_joint_velocity);
 control_channel!(TorqueControl, JointState, hold_joint_torque);
 control_channel!(ArmTorqueControl, ArmState, hold_arm_torque);
+
+/// The flange pose in the world, through Bullet's inverse kinematics each
+/// cycle onto the position motors; see
+/// [`RsBulletControlSpace`] for `CartesianPoseControl`.
+impl<const N: usize, R> ControlWith<CartesianPoseControl<N>> for RsBulletDevice<R>
+where
+    R: Joints<N>,
+{
+    /// The last commanded flange pose, else the measured one.
+    fn hold_command(state: &ArmState<N>) -> Pose {
+        state
+            .flange
+            .cmd
+            .pose()
+            .or(state.flange.meas.pose())
+            .unwrap_or(Pose::IDENTITY)
+    }
+
+    fn control_with_flow<F>(&mut self, closure: F) -> RobotResult<()>
+    where
+        F: FnMut(ArmState<N>, Duration) -> ControlStep<Pose>,
+    {
+        self.session::<CartesianPoseControl<N>, F>(closure)
+    }
+}
+
+impl<const N: usize, R> AsyncControlWith<CartesianPoseControl<N>> for RsBulletDevice<R>
+where
+    R: Joints<N> + Send + Sync,
+{
+    fn control_native_async<C>(
+        &mut self,
+        callback: &mut C,
+    ) -> impl Future<Output = RobotResult<()>> + Send
+    where
+        C: AsyncControlCallback<ArmState<N>, Pose>,
+    {
+        self.session_async::<CartesianPoseControl<N>, C>(callback)
+    }
+}
 
 /// Available after [`RsBulletDevice::with_gripper`]; otherwise every method
 /// reports the gripper unsupported.
