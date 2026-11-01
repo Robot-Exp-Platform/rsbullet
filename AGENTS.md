@@ -26,6 +26,7 @@ it does not require a Python/PyBullet subprocess.
 - Shared traits belong in `roplat_behavior` only when they express reusable
   capabilities; simulator-specific queries and task controllers remain in their
   respective backend and application layers.
+- Library, contract and driver code follows the style rules in roplat-skills: [library-code-style.md](https://github.com/Robot-Exp-Platform/roplat-skills/blob/next/skills/roplat-development/references/library-code-style.md) (branch `next`; every rule carries a strength: must / should / may). New code follows them at once; existing code when it is touched.
 
 The finite `panda_headless` example is an API starting point. It does not prove
 grasp success, physical safety, all-device support, or full PyBullet parity.
