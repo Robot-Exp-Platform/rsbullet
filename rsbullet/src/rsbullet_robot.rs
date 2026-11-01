@@ -8,10 +8,10 @@ use std::{marker::PhantomData, sync::mpsc::Sender};
 use anyhow::Result;
 use roplat_behavior::behavior::{Arm, EndPoint, EndPointPose, FlangeSpace, JointSpace, Joints};
 use roplat_behavior::{
-    ArmState, ArmTorqueControl, CartesianPoseControl, ControlObservation, ControlObserver,
-    ControlSpace, ControlStep, JointLimits, JointPositionControl, JointState, JointVelocityControl,
-    LoadState, MotionLimits, MoveTo, MoveTraj, Pose, Robot, RobotDescription, RobotException,
-    RobotResult, TorqueControl,
+    ArmState, ArmTorqueControl, CartesianLimits, CartesianPoseControl, ControlExit,
+    ControlObservation, ControlObserver, ControlSpace, ControlStep, JointLimits,
+    JointPositionControl, JointState, JointVelocityControl, LoadState, MotionLimits, MoveTo,
+    MoveTraj, Pose, Robot, RobotDescription, RobotException, RobotResult, TorqueControl,
 };
 use roplat_trajectory::path_generate;
 use roplat_world::{EntityBuilder, ModelSelectionError, PhysicsEngine, SimulationBackend};
@@ -65,8 +65,9 @@ pub struct RsBulletRobot<R> {
     /// Configure `RsBullet::set_step_time` and `SimRhythm` pacing explicitly.
     pub control_period: Duration,
     /// The `MotionLimits<N>` set through [`Arm::set_motion_limits`], or `None`
-    /// for the declared envelope. Type-erased because the handle is not
-    /// generic over the joint count.
+    /// for the declared envelope.
+    // dyn(a): the joint count `N` is known only at the call that sets the
+    // limits; the handle is not generic over it.
     motion_limits: Option<Box<dyn Any + Send + Sync>>,
     _marker: PhantomData<R>,
 }
@@ -87,7 +88,7 @@ impl<R> RsBulletRobot<R> {
         self.motion_limits
             .as_deref()
             .and_then(|limits| limits.downcast_ref::<MotionLimits<N>>())
-            .map_or_else(R::joint_limits, MotionLimits::scaled_joint)
+            .map_or(R::JOINT_LIMITS, MotionLimits::scaled_joint)
     }
 
     /// The flange pose in the latest refreshed state.
@@ -191,7 +192,8 @@ impl<R> RsBulletRobot<R> {
 ///
 /// A cycle is [`Session::observe`], the controller, then [`Session::conclude`]:
 /// the command is applied and the world integrates once. `Break` applies
-/// nothing; `done` applies its command and integrates once more. However the
+/// nothing and ends the session, with the error it carries when it failed;
+/// `done` applies its command and integrates once more. However the
 /// session ends, [`Session::end`] leaves the joints holding their measured
 /// position, as a real arm does after a control session.
 pub(crate) struct Session<'a, R, S> {
@@ -256,8 +258,10 @@ impl<'a, R, S: RsBulletControlSpace<R>> Session<'a, R, S> {
     /// integrate once. Returns whether the session continues.
     pub(crate) fn conclude(&mut self, step: ControlStep<S::Command>) -> RobotResult<bool> {
         notify_control_observers(&self.robot.after_observers, &self.full_state, self.period());
-        let ControlFlow::Continue((command, done)) = step else {
-            return Ok(false);
+        let (command, done) = match step {
+            ControlFlow::Continue(step) => step,
+            ControlFlow::Break(ControlExit::Stopped) => return Ok(false),
+            ControlFlow::Break(ControlExit::Failed(error)) => return Err(error),
         };
         S::apply_at(
             self.engine.client_mut(),
@@ -650,25 +654,14 @@ where
 {
     const JOINT_DEFAULT: [f64; N] = R::JOINT_DEFAULT;
     const JOINT_PACKED: [f64; N] = R::JOINT_PACKED;
-    const JOINT_MIN: [f64; N] = R::JOINT_MIN;
-    const JOINT_MAX: [f64; N] = R::JOINT_MAX;
-    const JOINT_VEL_BOUND: [f64; N] = R::JOINT_VEL_BOUND;
-    const JOINT_ACC_BOUND: [f64; N] = R::JOINT_ACC_BOUND;
-    const JOINT_JERK_BOUND: [f64; N] = R::JOINT_JERK_BOUND;
-    const TORQUE_BOUND: [f64; N] = R::TORQUE_BOUND;
-    const TORQUE_DOT_BOUND: [f64; N] = R::TORQUE_DOT_BOUND;
+    const JOINT_LIMITS: JointLimits<N> = R::JOINT_LIMITS;
 }
 
 impl<R> EndPoint for RsBulletRobot<R>
 where
     R: EndPoint,
 {
-    const CARTESIAN_VEL_BOUND: f64 = R::CARTESIAN_VEL_BOUND;
-    const CARTESIAN_ACC_BOUND: f64 = R::CARTESIAN_ACC_BOUND;
-    const CARTESIAN_JERK_BOUND: f64 = R::CARTESIAN_JERK_BOUND;
-    const ROTATION_VEL_BOUND: f64 = R::ROTATION_VEL_BOUND;
-    const ROTATION_ACC_BOUND: f64 = R::ROTATION_ACC_BOUND;
-    const ROTATION_JERK_BOUND: f64 = R::ROTATION_JERK_BOUND;
+    const CARTESIAN_LIMITS: CartesianLimits = R::CARTESIAN_LIMITS;
 }
 
 impl<R> EndPointPose for RsBulletRobot<R> {
@@ -698,18 +691,19 @@ where
             .lock()
             .map(|cache| cache.clone().into())
             .map_err(|_| RobotException::NetworkError("state cache poisoned".to_string()))?;
-        let (path_generate, t_max) = path_generate::joint_s_curve(
-            &state.joint.meas.q().unwrap_or([0.; N]),
-            &target,
-            &planned.dq_max,
-            &planned.ddq_max,
-            &planned.dddq_max,
-        );
+        let Some(start) = state.joint.meas.q() else {
+            return Err(RobotException::CommandException(
+                "joint positions are unavailable; the motion was not started".into(),
+            ));
+        };
+        let mut curve =
+            path_generate::JointSCurve::new(planned.dq_max, planned.ddq_max, planned.dddq_max);
+        curve.plan(start, target);
 
         let mut duration = Duration::from_secs(0);
         self.enqueue(move |client, dt| {
             duration += dt;
-            let target = path_generate(duration);
+            let (target, done) = curve.apply(duration);
             let limits = joint_effort_limits(client, body_id, &joint_indices, planned.tau_max)?;
             client.set_joint_motor_control_array(
                 body_id,
@@ -718,7 +712,7 @@ where
                 Some(&limits),
             )?;
 
-            Ok(duration >= t_max)
+            Ok(done)
         })
         .map_err(Into::into)
     }
@@ -813,7 +807,10 @@ where
 /// This trait is local to rsbullet. It serves both the queued
 /// [`RsBulletRobot::control_with`] and the blocking `ControlWith` sessions of
 /// [`crate::RsBulletDevice`].
-pub trait RsBulletControlSpace<R>: ControlSpace<RsBulletRobot<R>> {
+// `R` stays: `apply` clamps to and `release` holds at the model's declared
+// limits, so the robot type carries information here (style ruling 3 removed
+// it only where it was ignored).
+pub trait RsBulletControlSpace<R>: ControlSpace {
     fn initialize(
         _client: &mut PhysicsClient,
         _body_id: i32,
@@ -1000,7 +997,7 @@ fn hold_measured_position<R: Joints<N>, const N: usize>(
         ));
     }
     let measured = std::array::from_fn(|i| states[i].position);
-    let declared = R::joint_limits();
+    let declared = R::JOINT_LIMITS;
     let target = clamp_position(measured, declared.q_min, declared.q_max)?;
     let limits = joint_effort_limits(client, body_id, joint_indices, declared.tau_max)?;
     client.set_joint_motor_control_array(
@@ -1039,7 +1036,7 @@ where
         command: [f64; N],
     ) -> BulletResult<()> {
         let joints = checked_joints::<N>(joint_indices)?;
-        let declared = R::joint_limits();
+        let declared = R::JOINT_LIMITS;
         let command = clamp_position(command, declared.q_min, declared.q_max)?;
         let limits = joint_effort_limits(client, body_id, joint_indices, declared.tau_max)?;
         client.set_joint_motor_control_array(
@@ -1087,7 +1084,7 @@ where
         command: [f64; N],
     ) -> BulletResult<()> {
         let joints = checked_joints::<N>(joint_indices)?;
-        let declared = R::joint_limits();
+        let declared = R::JOINT_LIMITS;
         let command = clamp_by(command, declared.dq_max)?;
         let limits = joint_effort_limits(client, body_id, joint_indices, declared.tau_max)?;
         client.set_joint_motor_control_array(
@@ -1143,8 +1140,7 @@ where
         command: [f64; N],
     ) -> BulletResult<()> {
         let joints = checked_joints::<N>(joint_indices)?;
-        let limits =
-            joint_effort_limits(client, body_id, joint_indices, R::joint_limits().tau_max)?;
+        let limits = joint_effort_limits(client, body_id, joint_indices, R::JOINT_LIMITS.tau_max)?;
         let command = clamp_by(command, limits)?;
         client.set_joint_motor_control_array(
             body_id,
@@ -1198,8 +1194,7 @@ where
         command: [f64; N],
     ) -> BulletResult<()> {
         let joints = checked_joints::<N>(joint_indices)?;
-        let limits =
-            joint_effort_limits(client, body_id, joint_indices, R::joint_limits().tau_max)?;
+        let limits = joint_effort_limits(client, body_id, joint_indices, R::JOINT_LIMITS.tau_max)?;
         let command = clamp_by(command, limits)?;
         client.set_joint_motor_control_array(
             body_id,

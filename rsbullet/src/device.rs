@@ -7,10 +7,10 @@ use std::{
 
 use roplat_behavior::behavior::{Arm, EndPoint, EndPointPose, FlangeSpace, JointSpace, Joints};
 use roplat_behavior::{
-    ArmState, ArmTorqueControl, AsyncControlCallback, AsyncControlWith, CartesianPoseControl,
-    ControlObservation, ControlStep, ControlWith, Gripper, JointPositionControl, JointState,
-    JointVelocityControl, LoadState, MotionLimits, MoveTo, Pose, Robot, RobotException,
-    RobotResult, TorqueControl,
+    ArmState, ArmTorqueControl, AsyncControlCallback, AsyncControlWith, CartesianLimits,
+    CartesianPoseControl, ControlExit, ControlObservation, ControlStep, ControlWith, Gripper,
+    JointLimits, JointPositionControl, JointState, JointVelocityControl, LoadState, MotionLimits,
+    MoveTo, Pose, Robot, RobotException, RobotResult, TorqueControl,
     msgs::{GripperCommand, GripperState},
 };
 use roplat_trajectory::path_generate;
@@ -390,34 +390,26 @@ where
     fn move_to(&mut self, target: [f64; N]) -> RobotResult<()> {
         let planned = self.robot.planning_limits::<N>();
         let target = clamp_position(target, planned.q_min, planned.q_max)?;
-        let mut path = None;
+        let mut curve =
+            path_generate::JointSCurve::new(planned.dq_max, planned.ddq_max, planned.dddq_max);
+        let mut started = false;
         let mut elapsed = Duration::ZERO;
-        let mut unobserved = false;
         <Self as ControlWith<JointPositionControl<N>>>::control_with_flow(self, |state, dt| {
-            if path.is_none() {
+            if !started {
                 let Some(start) = state.meas.q() else {
-                    unobserved = true;
-                    return ControlFlow::Break(());
+                    return ControlFlow::Break(ControlExit::Failed(
+                        RobotException::CommandException(
+                            "joint positions are unavailable; the motion was not started".into(),
+                        ),
+                    ));
                 };
-                path = Some(path_generate::joint_s_curve(
-                    &start,
-                    &target,
-                    &planned.dq_max,
-                    &planned.ddq_max,
-                    &planned.dddq_max,
-                ));
+                curve.plan(start, target);
+                started = true;
             }
-            let (generate, total) = path.as_ref().expect("path planned on the first cycle");
             // A command applies over the next integration; aim at its end.
             elapsed += dt;
-            ControlFlow::Continue((generate(elapsed), elapsed >= *total))
-        })?;
-        if unobserved {
-            return Err(RobotException::CommandException(
-                "joint positions are unavailable; the motion was not started".into(),
-            ));
-        }
-        Ok(())
+            ControlFlow::Continue(curve.apply(elapsed))
+        })
     }
 }
 
@@ -438,25 +430,14 @@ where
 {
     const JOINT_DEFAULT: [f64; N] = R::JOINT_DEFAULT;
     const JOINT_PACKED: [f64; N] = R::JOINT_PACKED;
-    const JOINT_MIN: [f64; N] = R::JOINT_MIN;
-    const JOINT_MAX: [f64; N] = R::JOINT_MAX;
-    const JOINT_VEL_BOUND: [f64; N] = R::JOINT_VEL_BOUND;
-    const JOINT_ACC_BOUND: [f64; N] = R::JOINT_ACC_BOUND;
-    const JOINT_JERK_BOUND: [f64; N] = R::JOINT_JERK_BOUND;
-    const TORQUE_BOUND: [f64; N] = R::TORQUE_BOUND;
-    const TORQUE_DOT_BOUND: [f64; N] = R::TORQUE_DOT_BOUND;
+    const JOINT_LIMITS: JointLimits<N> = R::JOINT_LIMITS;
 }
 
 impl<R> EndPoint for RsBulletDevice<R>
 where
     R: EndPoint,
 {
-    const CARTESIAN_VEL_BOUND: f64 = R::CARTESIAN_VEL_BOUND;
-    const CARTESIAN_ACC_BOUND: f64 = R::CARTESIAN_ACC_BOUND;
-    const CARTESIAN_JERK_BOUND: f64 = R::CARTESIAN_JERK_BOUND;
-    const ROTATION_VEL_BOUND: f64 = R::ROTATION_VEL_BOUND;
-    const ROTATION_ACC_BOUND: f64 = R::ROTATION_ACC_BOUND;
-    const ROTATION_JERK_BOUND: f64 = R::ROTATION_JERK_BOUND;
+    const CARTESIAN_LIMITS: CartesianLimits = R::CARTESIAN_LIMITS;
 }
 
 impl<R> EndPointPose for RsBulletDevice<R> {

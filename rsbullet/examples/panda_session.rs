@@ -11,7 +11,9 @@ use roplat::RoplatResult;
 use roplat_behavior::behavior::{EndPoint, Joints};
 use roplat_behavior::msgs::Clock;
 use roplat_behavior::roplat::ControlRhythm;
-use roplat_behavior::{ControlWith, JointPositionControl, JointState, Robot, RobotDescription};
+use roplat_behavior::{
+    ControlWith, JointLimits, JointPositionControl, JointState, Robot, RobotDescription,
+};
 use roplat_world::{AddRobot, EntityBuilder, PhysicsEngine};
 use rsbullet::{Mode, RsBullet, RsBulletDevice};
 
@@ -23,12 +25,16 @@ impl RobotDescription for Panda {
 }
 
 impl Joints<7> for Panda {
-    const JOINT_MIN: [f64; 7] = [
-        -2.8973, -1.7628, -2.8973, -3.0718, -2.8973, -0.0175, -2.8973,
-    ];
-    const JOINT_MAX: [f64; 7] = [2.8973, 1.7628, 2.8973, -0.0698, 2.8973, 3.7525, 2.8973];
-    const JOINT_VEL_BOUND: [f64; 7] = [2.175, 2.175, 2.175, 2.175, 2.61, 2.61, 2.61];
-    const TORQUE_BOUND: [f64; 7] = [87.0, 87.0, 87.0, 87.0, 12.0, 12.0, 12.0];
+    const JOINT_LIMITS: JointLimits<7> = JointLimits {
+        dq_max: [2.175, 2.175, 2.175, 2.175, 2.61, 2.61, 2.61],
+        tau_max: [87.0, 87.0, 87.0, 87.0, 12.0, 12.0, 12.0],
+        ..JointLimits::positions(
+            [
+                -2.8973, -1.7628, -2.8973, -3.0718, -2.8973, -0.0175, -2.8973,
+            ],
+            [2.8973, 1.7628, 2.8973, -0.0698, 2.8973, 3.7525, 2.8973],
+        )
+    };
 }
 
 impl EndPoint for Panda {}

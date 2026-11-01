@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use nalgebra::Isometry3;
 use roplat_behavior::behavior::{EndPoint, JointSpace, Joints};
 use roplat_behavior::msgs::GripperCommand;
-use roplat_behavior::{Gripper, MoveTo, RobotDescription, RobotException};
+use roplat_behavior::{Gripper, JointLimits, MoveTo, RobotDescription, RobotException};
 use roplat_world::{AddRobot, EntityBuilder, PhysicsEngine};
 use rsbullet::{ForceFrame, GRASP_EPSILON, MOVE_TOLERANCE, Mode, RsBullet, RsBulletDevice};
 
@@ -23,11 +23,12 @@ impl RobotDescription for Rig {
 }
 
 impl Joints<1> for Rig {
-    const JOINT_MIN: [f64; 1] = [-0.2];
-    const JOINT_MAX: [f64; 1] = [0.2];
-    const JOINT_VEL_BOUND: [f64; 1] = [0.5];
-    const JOINT_ACC_BOUND: [f64; 1] = [2.0];
-    const JOINT_JERK_BOUND: [f64; 1] = [20.0];
+    const JOINT_LIMITS: JointLimits<1> = JointLimits {
+        dq_max: [0.5],
+        ddq_max: [2.0],
+        dddq_max: [20.0],
+        ..JointLimits::positions([-0.2], [0.2])
+    };
 }
 
 impl EndPoint for Rig {}

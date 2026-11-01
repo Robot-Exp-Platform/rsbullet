@@ -172,14 +172,14 @@ impl Node for Sense {
         // through the native observer bridge, outside the graph's same-cycle data edges.
         let _state = robot
             .read_state()
-            .map_err(|e| RoplatError::Resource(e.to_string()))?;
+            .map_err(|e| RoplatError::Node(e.to_string().into()))?;
         self.evidence
             .lock()
-            .map_err(|_| RoplatError::Resource("evidence lock poisoned".into()))?
+            .map_err(|_| RoplatError::Node("evidence lock poisoned".into()))?
             .frames
             .last()
             .cloned()
-            .ok_or_else(|| RoplatError::Resource("missing physics sample".into()))
+            .ok_or_else(|| RoplatError::Node("missing physics sample".into()))
     }
 }
 
@@ -325,7 +325,7 @@ impl Node for Actuate {
                     .active_command = command;
                 Ok(true)
             })
-            .map_err(|e| RoplatError::Resource(e.to_string()))
+            .map_err(|e| RoplatError::Node(e.to_string().into()))
     }
 }
 
