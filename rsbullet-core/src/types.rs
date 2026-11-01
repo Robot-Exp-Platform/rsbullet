@@ -288,19 +288,13 @@ impl From<[f64; 3]> for UrdfOptions {
 
 impl From<na::Isometry3<f64>> for UrdfOptions {
     fn from(base: na::Isometry3<f64>) -> Self {
-        Self {
-            base: Some(base),
-            ..Self::default()
-        }
+        Self { base: Some(base), ..Self::default() }
     }
 }
 
 impl From<LoadModelFlags> for UrdfOptions {
     fn from(flags: LoadModelFlags) -> Self {
-        UrdfOptions {
-            flags: Some(flags),
-            ..Default::default()
-        }
+        UrdfOptions { flags: Some(flags), ..Default::default() }
     }
 }
 
@@ -312,10 +306,7 @@ pub struct SdfOptions {
 
 impl From<(Option<bool>, Option<f64>)> for SdfOptions {
     fn from(value: (Option<bool>, Option<f64>)) -> Self {
-        Self {
-            use_maximal_coordinates: value.0,
-            global_scaling: value.1,
-        }
+        Self { use_maximal_coordinates: value.0, global_scaling: value.1 }
     }
 }
 
@@ -327,10 +318,7 @@ pub struct MjcfOptions {
 
 impl From<LoadModelFlags> for Option<MjcfOptions> {
     fn from(flags: LoadModelFlags) -> Self {
-        Some(MjcfOptions {
-            flags: Some(flags),
-            use_multi_body: None,
-        })
+        Some(MjcfOptions { flags: Some(flags), use_multi_body: None })
     }
 }
 
@@ -489,15 +477,7 @@ impl<'a> From<Entity<'a>> for CollisionGeometry<'a> {
             Entity::Plane { normal, constant } => Self::Plane { normal, constant },
             Entity::MeshFile { file, scale } => Self::MeshFile { file, scale },
             Entity::ConvexMesh { vertices, scale } => Self::ConvexMesh { vertices, scale },
-            Entity::Mesh {
-                vertices,
-                indices,
-                scale,
-            } => Self::Mesh {
-                vertices,
-                indices,
-                scale,
-            },
+            Entity::Mesh { vertices, indices, scale } => Self::Mesh { vertices, indices, scale },
         }
     }
 }
@@ -510,19 +490,13 @@ pub struct CollisionShapeOptions {
 
 impl Default for CollisionShapeOptions {
     fn default() -> Self {
-        Self {
-            transform: na::Isometry3::identity(),
-            flags: None,
-        }
+        Self { transform: na::Isometry3::identity(), flags: None }
     }
 }
 
 impl From<na::Isometry3<f64>> for CollisionShapeOptions {
     fn from(transform: na::Isometry3<f64>) -> Self {
-        Self {
-            transform,
-            flags: None,
-        }
+        Self { transform, flags: None }
     }
 }
 
@@ -531,10 +505,7 @@ where
     T: Into<na::Isometry3<f64>>,
 {
     fn from(value: (T, Option<i32>)) -> Self {
-        Self {
-            transform: value.0.into(),
-            flags: value.1,
-        }
+        Self { transform: value.0.into(), flags: value.1 }
     }
 }
 
@@ -590,24 +561,16 @@ impl<'a> From<Entity<'a>> for VisualGeometry<'a> {
             Entity::Cylinder { radius, height } => Self::Cylinder { radius, height },
             Entity::Plane { normal, constant } => Self::Plane { normal, constant },
             Entity::MeshFile { file, scale } => Self::Mesh { file, scale },
-            Entity::Mesh {
-                vertices,
-                indices,
-                scale,
-            } => Self::MeshData {
+            Entity::Mesh { vertices, indices, scale } => Self::MeshData {
                 vertices,
                 indices: Some(indices),
                 normals: None,
                 uvs: None,
                 scale,
             },
-            Entity::ConvexMesh { vertices, scale } => Self::MeshData {
-                vertices,
-                indices: None,
-                normals: None,
-                uvs: None,
-                scale,
-            },
+            Entity::ConvexMesh { vertices, scale } => {
+                Self::MeshData { vertices, indices: None, normals: None, uvs: None, scale }
+            }
         }
     }
 }
@@ -642,10 +605,7 @@ impl Default for VisualShapeOptions {
 
 impl From<na::Isometry3<f64>> for VisualShapeOptions {
     fn from(transform: na::Isometry3<f64>) -> Self {
-        Self {
-            transform,
-            ..Default::default()
-        }
+        Self { transform, ..Default::default() }
     }
 }
 
@@ -1163,10 +1123,10 @@ impl ControlModeArray<'_> {
     }
 }
 
-/// Multi-DoF 单关节控制参数，使用枚举携带模式与数据（对齐 `set_joint_motor_control` 的风格）。
+/// Control parameters of one multi-DoF joint: an enum carrying the mode and its data, in the style of `set_joint_motor_control`.
 #[derive(Debug, Clone)]
 pub enum MultiDofControl<'a> {
-    /// 位置/PD/Stable-PD 类控制，提供位置与速度目标、增益、力等。
+    /// Position, PD and stable-PD control: position and velocity targets, gains and forces.
     Position {
         target_positions: Option<&'a [f64]>,
         target_velocities: Option<&'a [f64]>,
@@ -1174,10 +1134,10 @@ pub enum MultiDofControl<'a> {
         velocity_gains: Option<&'a [f64]>,
         forces: Option<&'a [f64]>,
         damping: Option<&'a [f64]>,
-        /// 限制最大速度（与 PD/StablePD 一致，可选）
+        /// Optional cap on the velocity, as for PD and stable PD.
         max_velocity: Option<f64>,
     },
-    /// PD 控制（行为与 Position 分支一致，仅控制码不同）。
+    /// PD control: behaves like the Position variant, only the control code differs.
     Pd {
         target_positions: Option<&'a [f64]>,
         target_velocities: Option<&'a [f64]>,
@@ -1187,7 +1147,7 @@ pub enum MultiDofControl<'a> {
         damping: Option<&'a [f64]>,
         max_velocity: Option<f64>,
     },
-    /// Stable-PD 控制（行为与 Position 分支一致，仅控制码不同）。
+    /// Stable-PD control: behaves like the Position variant, only the control code differs.
     StablePd {
         target_positions: Option<&'a [f64]>,
         target_velocities: Option<&'a [f64]>,
@@ -1197,14 +1157,14 @@ pub enum MultiDofControl<'a> {
         damping: Option<&'a [f64]>,
         max_velocity: Option<f64>,
     },
-    /// 速度控制，提供速度目标、速度增益、以及力限制。
+    /// Velocity control: a velocity target, its gain and a force limit.
     Velocity {
         target_velocities: Option<&'a [f64]>,
         velocity_gains: Option<&'a [f64]>,
         forces: Option<&'a [f64]>,
         damping: Option<&'a [f64]>,
     },
-    /// 力/力矩控制，直接指定力数组。
+    /// Force or torque control: the forces are given directly.
     Torque {
         forces: Option<&'a [f64]>,
         damping: Option<&'a [f64]>,
@@ -1212,7 +1172,7 @@ pub enum MultiDofControl<'a> {
 }
 
 impl MultiDofControl<'_> {
-    /// 与底层 Bullet 控制码保持一致，用于初始化命令。
+    /// Matches the underlying Bullet control code, for initializing the command.
     pub fn as_raw(&self) -> i32 {
         match self {
             MultiDofControl::Velocity { .. } => 0,
@@ -1239,15 +1199,15 @@ impl MultiDofControl<'_> {
     }
 }
 
-/// Multi-DoF 批量控制条目：关联关节索引与控制枚举。
+/// One entry of a batched multi-DoF control: a joint index and its control.
 #[derive(Debug, Clone)]
 pub struct MultiDofControlEntry<'a> {
     pub joint_index: i32,
     pub control: MultiDofControl<'a>,
 }
 
-// 旧的 JointMotorControlMultiDofOptions / JointMotorControlMultiDofArrayOptions 已移除，
-// 请使用 MultiDofControl 与 MultiDofControlEntry。
+// The former JointMotorControlMultiDofOptions and JointMotorControlMultiDofArrayOptions are gone;
+// use MultiDofControl and MultiDofControlEntry.
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
@@ -1482,11 +1442,7 @@ pub struct CameraImageOptions {
 
 impl CameraImageOptions {
     pub fn new(width: i32, height: i32) -> Self {
-        Self {
-            width,
-            height,
-            ..Self::default()
-        }
+        Self { width, height, ..Self::default() }
     }
 }
 
@@ -1582,12 +1538,7 @@ pub struct DebugParameterOptions<'a> {
 
 impl Default for DebugParameterOptions<'_> {
     fn default() -> Self {
-        Self {
-            name: "",
-            range_min: 0.0,
-            range_max: 1.0,
-            start_value: 0.0,
-        }
+        Self { name: "", range_min: 0.0, range_max: 1.0, start_value: 0.0 }
     }
 }
 
@@ -1810,18 +1761,13 @@ impl MouseButtonState {
 impl From<b3MouseEvent> for MouseEvent {
     fn from(event: b3MouseEvent) -> Self {
         if event.m_eventType == 0 {
-            Self::Move {
-                mouse_x: event.m_mousePosX,
-                mouse_y: event.m_mousePosY,
-            }
+            Self::Move { mouse_x: event.m_mousePosX, mouse_y: event.m_mousePosY }
         } else {
             Self::Button {
                 mouse_x: event.m_mousePosX,
                 mouse_y: event.m_mousePosY,
                 button_index: event.m_buttonIndex,
-                button_state: MouseButtonState {
-                    flag: event.m_buttonState,
-                },
+                button_state: MouseButtonState { flag: event.m_buttonState },
             }
         }
     }

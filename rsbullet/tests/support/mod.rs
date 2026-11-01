@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use roplat_behavior::behavior::{EndPoint, Joints};
-use roplat_behavior::{Robot, RobotDescription};
+use roplat_behavior::{JointLimits, Robot, RobotDescription};
 use roplat_world::{AddRobot, EntityBuilder};
 use rsbullet::{Mode, RsBullet, RsBulletDevice, RsBulletRobot};
 
@@ -16,11 +16,12 @@ impl RobotDescription for Axis {
 }
 
 impl Joints<1> for Axis {
-    const JOINT_MIN: [f64; 1] = [-1.0];
-    const JOINT_MAX: [f64; 1] = [1.0];
-    const JOINT_VEL_BOUND: [f64; 1] = [1.0];
-    const JOINT_ACC_BOUND: [f64; 1] = [4.0];
-    const JOINT_JERK_BOUND: [f64; 1] = [40.0];
+    const JOINT_LIMITS: JointLimits<1> = JointLimits {
+        dq_max: [1.0],
+        ddq_max: [4.0],
+        dddq_max: [40.0],
+        ..JointLimits::positions([-1.0], [1.0])
+    };
 }
 
 impl EndPoint for Axis {}

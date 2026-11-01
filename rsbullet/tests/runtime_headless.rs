@@ -3,8 +3,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use roplat_behavior::{
-    JointVelocityControl, Joints, ModelFormat, Robot, RobotDescription, SimulationModel,
-    TorqueControl,
+    JointLimits, JointVelocityControl, Joints, ModelFormat, Robot, RobotDescription,
+    SimulationModel, TorqueControl,
 };
 use roplat_world::{AddRobot, EntityBuilder, PhysicsEngine};
 use rsbullet::{BulletError, Mode, RsBullet};
@@ -17,10 +17,11 @@ impl RobotDescription for Axis {
     ));
 }
 impl Joints<1> for Axis {
-    const JOINT_MIN: [f64; 1] = [-1.0];
-    const JOINT_MAX: [f64; 1] = [1.0];
-    const JOINT_VEL_BOUND: [f64; 1] = [0.5];
-    const TORQUE_BOUND: [f64; 1] = [0.2];
+    const JOINT_LIMITS: JointLimits<1> = JointLimits {
+        dq_max: [0.5],
+        tau_max: [0.2],
+        ..JointLimits::positions([-1.0], [1.0])
+    };
 }
 
 struct UrdfEffort;
@@ -28,10 +29,8 @@ impl RobotDescription for UrdfEffort {
     const URDF: Option<&'static str> = Axis::URDF;
 }
 impl Joints<1> for UrdfEffort {
-    const JOINT_MIN: [f64; 1] = [-1.0];
-    const JOINT_MAX: [f64; 1] = [1.0];
-    const JOINT_VEL_BOUND: [f64; 1] = [0.5];
-    // TORQUE_BOUND intentionally uses roplat_behavior's unspecified default.
+    const JOINT_LIMITS: JointLimits<1> =
+        JointLimits { dq_max: [0.5], ..JointLimits::positions([-1.0], [1.0]) };
 }
 
 #[test]
@@ -128,8 +127,7 @@ fn missing_effort_bounds_are_explicit_errors_before_integration() -> anyhow::Res
         ));
     }
     impl Joints<1> for Unbounded {
-        const JOINT_MIN: [f64; 1] = [-1.0];
-        const JOINT_MAX: [f64; 1] = [1.0];
+        const JOINT_LIMITS: JointLimits<1> = JointLimits::positions([-1.0], [1.0]);
     }
     let mut engine = RsBullet::new(Mode::Direct)?;
     let robot = engine

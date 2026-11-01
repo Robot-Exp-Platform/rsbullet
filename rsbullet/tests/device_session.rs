@@ -8,7 +8,8 @@ use std::{
 use roplat_behavior::behavior::{Arm, JointSpace};
 use roplat_behavior::msgs::Clock;
 use roplat_behavior::{
-    AsyncControl, Control, JointPositionControl, JointState, JointVelocityControl, MoveTo,
+    AsyncControl, Control, ControlExit, JointPositionControl, JointState, JointVelocityControl,
+    MoveTo,
 };
 use roplat_world::PhysicsEngine;
 use rsbullet::{Mode, RsBullet, RsBulletDevice};
@@ -37,7 +38,9 @@ fn every_cycle_integrates_once_with_the_physics_timestep() -> anyhow::Result<()>
 #[test]
 fn break_applies_nothing_and_done_integrates_its_command() -> anyhow::Result<()> {
     let mut device = device()?;
-    device.control_with_flow::<JointPositionControl<1>, _>(|_, _| ControlFlow::Break(()))?;
+    device.control_with_flow::<JointPositionControl<1>, _>(|_, _| {
+        ControlFlow::Break(ControlExit::Stopped)
+    })?;
     assert_eq!(device.engine().steps_completed(), 0);
     device.control_with::<JointPositionControl<1>, _>(|_, _| ([0.5], true))?;
     assert_eq!(device.engine().steps_completed(), 1);

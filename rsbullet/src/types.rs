@@ -6,9 +6,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use roplat_behavior::{ArmState, JointSample, SpatialSample, StateView};
 use rsbullet_core::{BulletResult, JointState, LinkState, PhysicsClient};
 
+// dyn(c): commands of different closure types wait in one queue.
 pub(crate) type QueuedControl =
     Box<dyn FnMut(&mut PhysicsClient, Duration) -> BulletResult<bool> + Send + 'static>;
 
+// dyn(c): refreshes of different closure types wait in one queue.
 pub(crate) type StateRefresh =
     Box<dyn FnMut(&mut PhysicsClient) -> BulletResult<()> + Send + 'static>;
 

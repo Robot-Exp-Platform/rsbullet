@@ -197,9 +197,9 @@ pub struct PhysicsClient {
     mode: Mode,
 }
 
-// SAFETY: PhysicsClient 是对 Bullet C API 不透明句柄的薄封装。
-// 每个 client handle 是独立的实例，同一时刻只有唯一持有者使用，
-// 在线程间移动（Send）是安全的。不实现 Sync 因为不应在多线程中同时访问。
+// SAFETY: PhysicsClient is a thin wrapper around an opaque Bullet C API handle.
+// Each client handle is an independent instance with a single owner at any time,
+// so moving it between threads (Send) is safe. It is not Sync: it must not be used from several threads at once.
 unsafe impl Send for PhysicsClient {}
 
 // Per-process GUI guard: 0 = free, 1 = occupied
@@ -1774,10 +1774,7 @@ impl PhysicsClient {
         let link_index = link_index.unwrap_or(-1);
         let visual_shape_index = visual_shape_index.unwrap_or(-1);
         let value_len = i32::try_from(value_c.as_bytes_with_nul().len()).map_err(|_| {
-            BulletError::CommandFailed {
-                message: "User data value is too long",
-                code: -1,
-            }
+            BulletError::CommandFailed { message: "User data value is too long", code: -1 }
         })?;
 
         let command = unsafe {
@@ -1944,10 +1941,7 @@ impl PhysicsClient {
             });
         }
 
-        Ok(Aabb {
-            min: aabb_min,
-            max: aabb_max,
-        })
+        Ok(Aabb { min: aabb_min, max: aabb_max })
     }
 
     pub fn reset_base_position_and_orientation(
@@ -2026,10 +2020,7 @@ impl PhysicsClient {
         let raw = unsafe { raw.assume_init() };
         let base_name = Self::read_c_string(&raw.m_baseName);
         let body_name = Self::read_c_string(&raw.m_bodyName);
-        Ok(BodyInfo {
-            base_name,
-            body_name,
-        })
+        Ok(BodyInfo { base_name, body_name })
     }
 
     pub fn get_num_joints(&self, body_unique_id: i32) -> i32 {
@@ -2200,11 +2191,7 @@ impl PhysicsClient {
         positions: Option<&[f64]>,
         velocities: Option<&[f64]>,
     ) -> BulletResult<()> {
-        let target = MultiDofTarget {
-            joint_index,
-            positions,
-            velocities,
-        };
+        let target = MultiDofTarget { joint_index, positions, velocities };
         self.reset_joint_states_multi_dof(body_unique_id, slice::from_ref(&target))
     }
 
@@ -2832,7 +2819,7 @@ impl PhysicsClient {
             return Ok(());
         }
         self.ensure_can_submit()?;
-        // 选择第一个条目的控制模式初始化命令（Bullet 要求一次命令同一模式）。
+        // Initialize the command with the first entry's control mode (Bullet wants one mode per command).
         let command = unsafe {
             ffi::b3JointControlCommandInit2(
                 self.handle,
@@ -2841,7 +2828,7 @@ impl PhysicsClient {
             )
         };
 
-        // 校验所有条目控制模式一致，以符合底层一次命令的限制。
+        // Check that every entry uses that mode, as the underlying single command requires.
         let expected_mode = entries[0].control.as_raw();
         for entry in entries {
             if entry.control.as_raw() != expected_mode {
@@ -3041,10 +3028,7 @@ impl PhysicsClient {
             }
         }
 
-        Ok(Jacobian {
-            linear: linear_matrix,
-            angular: angular_matrix,
-        })
+        Ok(Jacobian { linear: linear_matrix, angular: angular_matrix })
     }
 
     pub fn calculate_mass_matrix(
@@ -3093,9 +3077,7 @@ impl PhysicsClient {
         }
         let matrix_size = out_dof as usize;
         if matrix_size == 0 {
-            return Ok(MassMatrix {
-                matrix: na::DMatrix::zeros(0, 0),
-            });
+            return Ok(MassMatrix { matrix: na::DMatrix::zeros(0, 0) });
         }
         raw.truncate(matrix_size * matrix_size);
         let matrix = na::DMatrix::from_column_slice(matrix_size, matrix_size, &raw);
@@ -3736,23 +3718,11 @@ impl PhysicsClient {
         let q_size = info.q_size.max(0) as usize;
         let u_size = info.u_size.max(0) as usize;
 
-        // 提取通用字段（damping、max_velocity），随后根据模式填充细节。
+        // Extract the common fields (damping, max_velocity), then fill in the mode-specific ones.
         let (damping_opt, max_velocity_opt) = match control {
-            MultiDofControl::Position {
-                damping,
-                max_velocity,
-                ..
-            }
-            | MultiDofControl::Pd {
-                damping,
-                max_velocity,
-                ..
-            }
-            | MultiDofControl::StablePd {
-                damping,
-                max_velocity,
-                ..
-            } => (*damping, *max_velocity),
+            MultiDofControl::Position { damping, max_velocity, .. }
+            | MultiDofControl::Pd { damping, max_velocity, .. }
+            | MultiDofControl::StablePd { damping, max_velocity, .. } => (*damping, *max_velocity),
             MultiDofControl::Velocity { damping, .. } | MultiDofControl::Torque { damping, .. } => {
                 (*damping, None)
             }
@@ -3806,7 +3776,7 @@ impl PhysicsClient {
                 });
             }
 
-            // 解构各模式下需要的参数
+            // Destructure the parameters each mode needs.
             let (target_positions, target_velocities, position_gains, velocity_gains, forces) =
                 match control {
                     MultiDofControl::Position {
@@ -3889,12 +3859,9 @@ impl PhysicsClient {
             }
 
             let (target_velocities, velocity_gains, forces) = match control {
-                MultiDofControl::Velocity {
-                    target_velocities,
-                    velocity_gains,
-                    forces,
-                    ..
-                } => (*target_velocities, *velocity_gains, *forces),
+                MultiDofControl::Velocity { target_velocities, velocity_gains, forces, .. } => {
+                    (*target_velocities, *velocity_gains, *forces)
+                }
                 _ => unreachable!(),
             };
 
@@ -4078,13 +4045,7 @@ impl PhysicsClient {
             segmentation_mask.resize(pixel_count, -1);
         }
 
-        Ok(CameraImage {
-            width,
-            height,
-            rgba,
-            depth,
-            segmentation_mask,
-        })
+        Ok(CameraImage { width, height, rgba, depth, segmentation_mask })
     }
 
     fn collect_vr_events(
@@ -4204,10 +4165,9 @@ impl PhysicsClient {
     }
 
     fn path_to_cstring(path: &Path) -> BulletResult<CString> {
-        let utf8 = path.to_str().ok_or(BulletError::CommandFailed {
-            message: "Path must be valid UTF-8",
-            code: -1,
-        })?;
+        let utf8 = path
+            .to_str()
+            .ok_or(BulletError::CommandFailed { message: "Path must be valid UTF-8", code: -1 })?;
         Ok(CString::new(utf8)?)
     }
 }
@@ -4974,29 +4934,19 @@ impl PhysicsClient {
         )?;
 
         let status_code = unsafe { ffi::b3GetStatusPluginCommandResult(status.handle) };
-        let mut raw = ffi::b3UserDataValue {
-            m_type: 0,
-            m_length: 0,
-            m_data1: ptr::null(),
-        };
+        let mut raw = ffi::b3UserDataValue { m_type: 0, m_length: 0, m_data1: ptr::null() };
         let has_data =
             unsafe { ffi::b3GetStatusPluginCommandReturnData(self.handle, &raw mut raw) } != 0;
         let return_data = if has_data && raw.m_length > 0 && !raw.m_data1.is_null() {
             let len = raw.m_length as usize;
             let bytes = unsafe { slice::from_raw_parts(raw.m_data1, len) };
             let data = bytes.iter().map(|&b| b as i32).collect();
-            Some(PluginCommandReturnData {
-                value_type: raw.m_type,
-                data,
-            })
+            Some(PluginCommandReturnData { value_type: raw.m_type, data })
         } else {
             None
         };
 
-        Ok(PluginCommandResult {
-            status: status_code,
-            return_data,
-        })
+        Ok(PluginCommandResult { status: status_code, return_data })
     }
 
     pub fn submit_profile_timing(&mut self, event_name: Option<&str>) -> BulletResult<()> {
@@ -5204,10 +5154,7 @@ impl PhysicsClient {
                 ));
             }
             let status_type = ffi::b3GetStatusType(handle);
-            Ok(CommandStatus {
-                handle,
-                status_type,
-            })
+            Ok(CommandStatus { handle, status_type })
         }
     }
 
@@ -5219,10 +5166,7 @@ impl PhysicsClient {
         let status = self.submit_command(command)?;
         let expected = expected_status as i32;
         if status.status_type != expected {
-            return Err(BulletError::UnexpectedStatus {
-                expected,
-                actual: status.status_type,
-            });
+            return Err(BulletError::UnexpectedStatus { expected, actual: status.status_type });
         }
         Ok(status)
     }
@@ -5316,11 +5260,7 @@ impl PhysicsClient {
                     )
                 }
             }
-            Mesh {
-                vertices,
-                indices,
-                scale,
-            } => {
+            Mesh { vertices, indices, scale } => {
                 if vertices.is_empty() || indices.is_empty() {
                     return Err(BulletError::CommandFailed {
                         message: "Concave mesh requires vertices and indices",
@@ -5343,11 +5283,7 @@ impl PhysicsClient {
                     )
                 }
             }
-            HeightfieldFile {
-                file,
-                mesh_scale,
-                texture_scaling,
-            } => {
+            HeightfieldFile { file, mesh_scale, texture_scaling } => {
                 let file_ptr = scratch.push_c_string(file)?;
                 unsafe {
                     ffi::b3CreateCollisionShapeAddHeightfield(
@@ -5452,13 +5388,7 @@ impl PhysicsClient {
                 let file_ptr = scratch.push_c_string(file)?;
                 unsafe { ffi::b3CreateVisualShapeAddMesh(command, file_ptr, scale.as_ptr()) }
             }
-            MeshData {
-                vertices,
-                indices,
-                normals,
-                uvs,
-                scale,
-            } => {
+            MeshData { vertices, indices, normals, uvs, scale } => {
                 if vertices.is_empty() {
                     return Err(BulletError::CommandFailed {
                         message: "Visual mesh requires vertices",

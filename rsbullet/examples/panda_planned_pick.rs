@@ -28,7 +28,7 @@ use roplat::{Completion, Execution, RoplatResult};
 use roplat_behavior::behavior::{EndPoint, JointSpace, Joints};
 use roplat_behavior::msgs::{GripperCommand, ManualClock};
 use roplat_behavior::roplat::ControlRhythm;
-use roplat_behavior::{Gripper, JointPositionControl, MoveTo, RobotDescription};
+use roplat_behavior::{Gripper, JointLimits, JointPositionControl, MoveTo, RobotDescription};
 use roplat_description::{Chain, Geometry, RobotModel};
 use roplat_kinematics::{CommonStop, chain_ik};
 use roplat_scene::{CollisionCheck, PlanningScene};
@@ -50,14 +50,18 @@ impl RobotDescription for Panda {
 }
 
 impl Joints<7> for Panda {
-    const JOINT_MIN: [f64; 7] = [
-        -2.8973, -1.7628, -2.8973, -3.0718, -2.8973, -0.0175, -2.8973,
-    ];
-    const JOINT_MAX: [f64; 7] = [2.8973, 1.7628, 2.8973, -0.0698, 2.8973, 3.7525, 2.8973];
-    const JOINT_VEL_BOUND: [f64; 7] = [2.175, 2.175, 2.175, 2.175, 2.61, 2.61, 2.61];
-    const JOINT_ACC_BOUND: [f64; 7] = [15.0, 7.5, 10.0, 12.5, 15.0, 20.0, 20.0];
-    const JOINT_JERK_BOUND: [f64; 7] = [7500.0, 3750.0, 5000.0, 6250.0, 7500.0, 10000.0, 10000.0];
-    const TORQUE_BOUND: [f64; 7] = [87.0, 87.0, 87.0, 87.0, 12.0, 12.0, 12.0];
+    const JOINT_LIMITS: JointLimits<7> = JointLimits {
+        dq_max: [2.175, 2.175, 2.175, 2.175, 2.61, 2.61, 2.61],
+        ddq_max: [15.0, 7.5, 10.0, 12.5, 15.0, 20.0, 20.0],
+        dddq_max: [7500.0, 3750.0, 5000.0, 6250.0, 7500.0, 10000.0, 10000.0],
+        tau_max: [87.0, 87.0, 87.0, 87.0, 12.0, 12.0, 12.0],
+        ..JointLimits::positions(
+            [
+                -2.8973, -1.7628, -2.8973, -3.0718, -2.8973, -0.0175, -2.8973,
+            ],
+            [2.8973, 1.7628, 2.8973, -0.0698, 2.8973, 3.7525, 2.8973],
+        )
+    };
 }
 
 impl EndPoint for Panda {}
