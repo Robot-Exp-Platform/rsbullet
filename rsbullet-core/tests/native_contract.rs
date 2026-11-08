@@ -25,9 +25,7 @@ fn native_motion_contact_validation_and_reset() -> Result<(), Box<dyn std::error
     assert!(client.set_gravity([f64::NAN, 0.0, 0.0]).is_err());
 
     let ground_shape = client.create_collision_shape(
-        &CollisionGeometry::Box {
-            half_extents: [1.0, 1.0, 0.05],
-        },
+        &CollisionGeometry::Box { half_extents: [1.0, 1.0, 0.05] },
         Some(CollisionShapeOptions::default()),
     )?;
     let ground = client.create_multi_body(&MultiBodyCreateOptions {
@@ -82,10 +80,7 @@ fn native_motion_contact_validation_and_reset() -> Result<(), Box<dyn std::error
     let asset = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/assets/linear_axis.urdf");
     let axis = client.load_urdf(
         asset,
-        Some(UrdfOptions {
-            use_fixed_base: true,
-            ..Default::default()
-        }),
+        Some(UrdfOptions { use_fixed_base: true, ..Default::default() }),
     )?;
     assert_eq!(client.get_joint_info(axis, 0)?.joint_name, "slide");
     assert_eq!(client.get_joint_info(axis, 0)?.link_name, "carriage");
@@ -253,11 +248,7 @@ fn seeded_ik_keeps_world_targets_on_translated_rotated_inertial_bases()
     );
     let body = client.load_urdf(
         concat!(env!("CARGO_MANIFEST_DIR"), "/tests/assets/offset_axis.urdf"),
-        Some(UrdfOptions {
-            base: Some(base),
-            use_fixed_base: true,
-            ..Default::default()
-        }),
+        Some(UrdfOptions { base: Some(base), use_fixed_base: true, ..Default::default() }),
     )?;
     let target = base * Isometry3::translation(0.25, 0.0, 0.0);
     for index in [-1, 1] {

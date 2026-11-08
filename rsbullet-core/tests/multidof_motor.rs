@@ -11,10 +11,7 @@ fn world(asset: &str) -> Result<(PhysicsClient, i32), Box<dyn std::error::Error>
     client.set_gravity([0.0; 3])?;
     let body = client.load_urdf(
         asset,
-        Some(UrdfOptions {
-            use_fixed_base: true,
-            ..Default::default()
-        }),
+        Some(UrdfOptions { use_fixed_base: true, ..Default::default() }),
     )?;
     Ok((client, body))
 }
@@ -28,10 +25,7 @@ fn send(
     if array {
         client.set_joint_motor_control_multi_dof_array(
             body,
-            &[MultiDofControlEntry {
-                joint_index: 0,
-                control,
-            }],
+            &[MultiDofControlEntry { joint_index: 0, control }],
         )
     } else {
         client.set_joint_motor_control_multi_dof(body, 0, &control)
@@ -125,10 +119,7 @@ fn spherical_torque_single_and_array_change_actual_angular_velocity()
                 &mut client,
                 body,
                 array,
-                MultiDofControl::Torque {
-                    forces: Some(&[0.0, 0.0, 0.004]),
-                    damping: None,
-                },
+                MultiDofControl::Torque { forces: Some(&[0.0, 0.0, 0.004]), damping: None },
             )?;
             client.step_simulation()?;
         }
