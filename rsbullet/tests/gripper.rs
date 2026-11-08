@@ -33,6 +33,8 @@ impl Joints<1> for Rig {
 
 impl EndPoint for Rig {}
 
+impl rsbullet::DeviceModel for Rig {}
+
 /// A 0.04 m, 0.1 kg cube.
 struct Block;
 

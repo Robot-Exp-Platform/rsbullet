@@ -39,6 +39,8 @@ impl Joints<7> for Panda {
 
 impl EndPoint for Panda {}
 
+impl rsbullet::DeviceModel for Panda {}
+
 const HOME: [f64; 7] = [0.0, -0.6, 0.0, -2.1, 0.0, 1.6, 0.8];
 const TARGET: [f64; 7] = [0.4, -0.3, -0.3, -1.8, 0.3, 1.9, 0.5];
 

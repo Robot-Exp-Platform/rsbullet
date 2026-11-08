@@ -16,8 +16,46 @@ use roplat_behavior::{
 use roplat_trajectory::path_generate;
 
 use crate::gripper::ParallelFingers;
-use crate::rsbullet_robot::{RsBulletControlSpace, Session, clamp_position};
+use crate::rsbullet_robot::{
+    JointMotion, RsBulletControlSpace, Session, clamp_position, hold_measured_position,
+};
 use crate::{RsBullet, RsBulletRobot, types::RsBulletRobotState};
+
+/// 1/240 s in whole nanoseconds (rounded down): Bullet's default physics
+/// step, and the control period of a model that names none.
+pub const DEFAULT_CONTROL_PERIOD: Duration = Duration::from_nanos(1_000_000_000 / 240);
+
+/// How near its target every joint must be (rad, or m for a prismatic
+/// joint) for a joint [`MoveTo`] of an [`RsBulletDevice`] to have arrived.
+///
+/// Bullet's position motors do not settle exactly under a load: a Panda
+/// under gravity at a 4 ms step holds its joints up to 9e-5 rad off their
+/// targets. The window is ten times that, so that an arm that has arrived
+/// is not failed for the solver's residual.
+pub const ARRIVAL_WINDOW: f64 = 1e-3;
+
+/// How long after its planned end a joint [`MoveTo`] of an
+/// [`RsBulletDevice`] waits, in simulated time, for the joints to arrive
+/// before it fails.
+pub const ARRIVAL_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// What a model type states about the device an [`RsBulletDevice`] over it
+/// stands in for, beside its `RobotDescription` and [`Joints`].
+///
+/// A model with nothing to state implements it empty and takes the
+/// defaults.
+pub trait DeviceModel {
+    /// The period of the device's control channel, which the simulated
+    /// device reports as [`Robot::CONTROL_PERIOD`]. Defaults to
+    /// [`DEFAULT_CONTROL_PERIOD`].
+    ///
+    /// A session runs one cycle per physics step and its controller
+    /// receives the world's step, so set the step to this period
+    /// (`PhysicsEngine::set_step_time`) before building the device. The
+    /// device does not set or check the step: in a world stepping at
+    /// another period its sessions do not keep the period it reports.
+    const CONTROL_PERIOD: Duration = DEFAULT_CONTROL_PERIOD;
+}
 
 /// A simulated device: one robot driving its own RsBullet world.
 ///
@@ -33,6 +71,16 @@ use crate::{RsBullet, RsBulletRobot, types::RsBulletRobotState};
 /// `done` applies its command and integrates once more. Other bodies keep their
 /// queued controls, which run inside every integration. However a session ends,
 /// the joints are left holding their measured position.
+///
+/// Sessions keep to the model's declared [`JointLimits`]: position commands
+/// are clamped to `q_min`..`q_max` and the position motors drive no joint
+/// faster than its `dq_max`, so a far target is approached at that speed;
+/// velocity commands are clamped to `dq_max`; torque commands to the
+/// efforts. A torque session bounds no speed: Bullet has no per-joint speed
+/// bound for a joint without a motor, and the device does not stop a joint
+/// that exceeds `dq_max` as a real arm's safety controller would.
+///
+/// [`Robot::CONTROL_PERIOD`] is the model's [`DeviceModel::CONTROL_PERIOD`].
 ///
 /// Sessions run in logical time unless [`RsBulletDevice::realtime`] is set;
 /// asynchronous sessions yield to sibling futures after every integration.
@@ -83,8 +131,8 @@ impl<R> RsBulletDevice<R> {
     /// failed grasp is not an error, `read_gripper().grasped` reports it.
     ///
     /// During a gripper motion the controlled joints keep their last motor
-    /// commands; after a control session or joint `MoveTo` they hold their
-    /// measured position.
+    /// commands; after a control session they hold their measured position,
+    /// after a joint `MoveTo` its target.
     pub fn with_gripper(mut self, fingers: [&str; 2]) -> RobotResult<Self> {
         self.ensure_valid()?;
         if self.gripper.is_some() {
@@ -211,9 +259,9 @@ async fn yield_now() {
     .await
 }
 
-impl<R> Robot for RsBulletDevice<R> {
+impl<R: DeviceModel> Robot for RsBulletDevice<R> {
     type State = RsBulletRobotState;
-    const CONTROL_PERIOD: Duration = <RsBulletRobot<R> as Robot>::CONTROL_PERIOD;
+    const CONTROL_PERIOD: Duration = R::CONTROL_PERIOD;
 
     fn version() -> String {
         "RsBulletDevice".to_string()
@@ -224,7 +272,7 @@ impl<R> Robot for RsBulletDevice<R> {
     }
 }
 
-impl<R> ControlObservation for RsBulletDevice<R> {
+impl<R: DeviceModel> ControlObservation for RsBulletDevice<R> {
     fn before<H>(&mut self, observer: H) -> &mut Self
     where
         H: FnMut(&Self::State, Duration) + Send + 'static,
@@ -272,7 +320,7 @@ macro_rules! control_channel {
     ($channel:ident, $obs:ident, $hold:ident) => {
         impl<const N: usize, R> ControlWith<$channel<N>> for RsBulletDevice<R>
         where
-            R: Joints<N>,
+            R: Joints<N> + DeviceModel,
         {
             fn hold_command(state: &$obs<N>) -> [f64; N] {
                 $hold(state)
@@ -288,7 +336,7 @@ macro_rules! control_channel {
 
         impl<const N: usize, R> AsyncControlWith<$channel<N>> for RsBulletDevice<R>
         where
-            R: Joints<N> + Send + Sync,
+            R: Joints<N> + DeviceModel + Send + Sync,
         {
             fn control_native_async<C>(
                 &mut self,
@@ -313,7 +361,7 @@ control_channel!(ArmTorqueControl, ArmState, hold_arm_torque);
 /// [`RsBulletControlSpace`] for `CartesianPoseControl`.
 impl<const N: usize, R> ControlWith<CartesianPoseControl<N>> for RsBulletDevice<R>
 where
-    R: Joints<N>,
+    R: Joints<N> + DeviceModel,
 {
     /// The last commanded flange pose, else the measured one.
     fn hold_command(state: &ArmState<N>) -> Pose {
@@ -335,7 +383,7 @@ where
 
 impl<const N: usize, R> AsyncControlWith<CartesianPoseControl<N>> for RsBulletDevice<R>
 where
-    R: Joints<N> + Send + Sync,
+    R: Joints<N> + DeviceModel + Send + Sync,
 {
     fn control_native_async<C>(
         &mut self,
@@ -383,39 +431,89 @@ impl<R> Gripper for RsBulletDevice<R> {
 
 impl<const N: usize, R> MoveTo<JointSpace<N>> for RsBulletDevice<R>
 where
-    R: Joints<N>,
+    R: Joints<N> + DeviceModel,
 {
-    /// Returns once the S-curve to `target` has been integrated to its end,
-    /// like a real arm's motion, unlike the queued [`RsBulletRobot`] motion.
+    /// Returns once the joints are in position, as a real arm's motion
+    /// does, unlike the queued [`RsBulletRobot`] motion.
+    ///
+    /// The motion is the S-curve to `target` planned with
+    /// [`Arm::motion_limits`] from the measured position, `target` clamped
+    /// to the position limits. Each cycle commands the curve's position at
+    /// the cycle's start and feeds forward the curve's mean velocity over
+    /// the cycle, so the position motors follow it without lagging. Once the
+    /// curve has ended the target is commanded at rest until every joint is
+    /// within [`ARRIVAL_WINDOW`] of it; the joints then hold the target.
+    ///
+    /// Joints that have not arrived [`ARRIVAL_TIMEOUT`] after the curve's
+    /// end, as against an obstacle or a load beyond their effort limits,
+    /// fail the motion with [`RobotException::CommandException`] and are
+    /// left holding where they stopped.
     fn move_to(&mut self, target: [f64; N]) -> RobotResult<()> {
         let planned = self.robot.planning_limits::<N>();
         let target = clamp_position(target, planned.q_min, planned.q_max)?;
         let mut curve =
             path_generate::JointSCurve::new(planned.dq_max, planned.ddq_max, planned.dddq_max);
-        let mut started = false;
-        let mut elapsed = Duration::ZERO;
-        <Self as ControlWith<JointPositionControl<N>>>::control_with_flow(self, |state, dt| {
-            if !started {
-                let Some(start) = state.meas.q() else {
+        let mut end = None;
+        // The time of this cycle's observation since the motion began.
+        let mut now = Duration::ZERO;
+        let outcome = self.session::<JointMotion<N>, _>(|state, dt| {
+            let Some(q) = state.meas.q() else {
+                return ControlFlow::Break(ControlExit::Failed(RobotException::CommandException(
+                    "joint positions are unavailable; the motion was stopped".into(),
+                )));
+            };
+            let end = *end.get_or_insert_with(|| curve.plan(q, target));
+            let at_rest = (target, [0.0; N]);
+            if now >= end {
+                let arrived = q
+                    .iter()
+                    .zip(&target)
+                    .all(|(q, target)| (q - target).abs() <= ARRIVAL_WINDOW);
+                if arrived {
+                    return ControlFlow::Continue((at_rest, true));
+                }
+                if now >= end + ARRIVAL_TIMEOUT {
                     return ControlFlow::Break(ControlExit::Failed(
-                        RobotException::CommandException(
-                            "joint positions are unavailable; the motion was not started".into(),
-                        ),
+                        RobotException::CommandException(format!(
+                            "the joints did not arrive within {ARRIVAL_WINDOW} of the target \
+                             {ARRIVAL_TIMEOUT:?} after the planned motion; they stopped at {q:?}"
+                        )),
                     ));
-                };
-                curve.plan(start, target);
-                started = true;
+                }
+                now += dt;
+                return ControlFlow::Continue((at_rest, false));
             }
-            // A command applies over the next integration; aim at its end.
-            elapsed += dt;
-            ControlFlow::Continue(curve.apply(elapsed))
-        })
+            let (from, _) = curve.apply(now);
+            let (to, _) = curve.apply(now + dt);
+            let seconds = dt.as_secs_f64();
+            let velocity = std::array::from_fn(|j| (to[j] - from[j]) / seconds);
+            now += dt;
+            ControlFlow::Continue(((from, velocity), false))
+        });
+        let Err(failure) = outcome else {
+            return Ok(());
+        };
+        if self.engine.is_faulted() || !self.robot.is_valid() {
+            return Err(failure);
+        }
+        // Stop where the joints are rather than pushing on to the target.
+        match hold_measured_position::<R, N>(
+            self.engine.client_mut(),
+            self.robot.body_id,
+            &self.robot.joint_indices,
+        ) {
+            Ok(()) => Err(failure),
+            Err(cleanup) => Err(RobotException::ControlSession {
+                primary: Box::new(failure),
+                cleanup: Box::new(cleanup.into()),
+            }),
+        }
     }
 }
 
 impl<R> MoveTo<FlangeSpace> for RsBulletDevice<R>
 where
-    R: EndPoint,
+    R: EndPoint + DeviceModel,
 {
     fn move_to(&mut self, _target: Pose) -> RobotResult<()> {
         Err(RobotException::UnprocessableInstructionError(
@@ -454,7 +552,7 @@ impl<R> EndPointPose for RsBulletDevice<R> {
 /// control sessions clamp to the declared limits.
 impl<const N: usize, R> Arm<N> for RsBulletDevice<R>
 where
-    R: Joints<N> + EndPoint,
+    R: Joints<N> + EndPoint + DeviceModel,
 {
     fn state(&mut self) -> RobotResult<ArmState<N>> {
         Arm::<N>::state(&mut self.robot)

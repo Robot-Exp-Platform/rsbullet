@@ -5,7 +5,8 @@ use roplat_behavior::{JointLimits, Robot, RobotDescription};
 use roplat_world::{AddRobot, EntityBuilder};
 use rsbullet::{Mode, RsBullet, RsBulletDevice, RsBulletRobot};
 
-/// One prismatic axis, effort 100 N and position limits of ±1 m.
+/// One prismatic axis along x, effort 100 N, position limits of ±1 m and
+/// a speed limit of 1 m/s.
 pub struct Axis;
 
 impl RobotDescription for Axis {
@@ -25,6 +26,8 @@ impl Joints<1> for Axis {
 }
 
 impl EndPoint for Axis {}
+
+impl rsbullet::DeviceModel for Axis {}
 
 pub fn load(engine: &mut RsBullet, y: f64) -> anyhow::Result<RsBulletRobot<Axis>> {
     engine

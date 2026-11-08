@@ -42,6 +42,8 @@ impl Joints<7> for Panda {
 
 impl EndPoint for Panda {}
 
+impl rsbullet::DeviceModel for Panda {}
+
 type Device = RsBulletDevice<Panda>;
 
 const ARM: [&str; 7] = [

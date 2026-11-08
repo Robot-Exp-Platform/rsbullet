@@ -66,6 +66,8 @@ impl Joints<7> for Panda {
 
 impl EndPoint for Panda {}
 
+impl rsbullet::DeviceModel for Panda {}
+
 type Device = RsBulletDevice<Panda>;
 type Control = ControlRhythm<Device, JointPositionControl<7>>;
 type Follower = JointTrajectoryFollower<Arc<ManualClock>, 7>;

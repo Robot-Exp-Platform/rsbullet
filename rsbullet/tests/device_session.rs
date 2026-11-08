@@ -9,11 +9,14 @@ use roplat_behavior::behavior::{Arm, JointSpace};
 use roplat_behavior::msgs::Clock;
 use roplat_behavior::{
     AsyncControl, Control, ControlExit, JointPositionControl, JointState, JointVelocityControl,
-    MoveTo,
+    MoveTo, Robot, RobotException,
 };
 use roplat_world::PhysicsEngine;
-use rsbullet::{Mode, RsBullet, RsBulletDevice};
-use support::{device, load, position};
+use rsbullet::{
+    ARRIVAL_TIMEOUT, ARRIVAL_WINDOW, DEFAULT_CONTROL_PERIOD, Mode, RsBullet, RsBulletDevice,
+    UrdfOptions,
+};
+use support::{Axis, device, load, position};
 
 #[test]
 fn every_cycle_integrates_once_with_the_physics_timestep() -> anyhow::Result<()> {
@@ -184,5 +187,98 @@ async fn an_async_session_cannot_pace_on_the_wall_clock() -> anyhow::Result<()> 
         .await;
     assert!(session.is_err());
     assert_eq!(device.engine().steps_completed(), 0);
+    Ok(())
+}
+
+#[test]
+fn the_device_reports_its_model_control_period() {
+    struct Kilohertz;
+    impl rsbullet::DeviceModel for Kilohertz {
+        const CONTROL_PERIOD: Duration = Duration::from_millis(1);
+    }
+    assert_eq!(
+        <RsBulletDevice<Kilohertz> as Robot>::CONTROL_PERIOD,
+        Duration::from_millis(1)
+    );
+    // A model that names no period keeps the earlier constant, 1/240 s.
+    assert_eq!(
+        <RsBulletDevice<Axis> as Robot>::CONTROL_PERIOD,
+        DEFAULT_CONTROL_PERIOD
+    );
+    assert_eq!(DEFAULT_CONTROL_PERIOD, Duration::from_nanos(4_166_666));
+    assert_eq!(
+        <rsbullet::RsBulletRobot<Axis> as Robot>::CONTROL_PERIOD,
+        DEFAULT_CONTROL_PERIOD
+    );
+}
+
+#[test]
+fn a_position_session_drives_no_joint_faster_than_its_speed_limit() -> anyhow::Result<()> {
+    // The axis may move at 1 m/s; its 100 N motor on 1 kg could go far
+    // faster towards a target 0.9 m away.
+    let mut device = device()?;
+    let mut fastest = 0.0_f64;
+    let mut cycles = 0;
+    device.control_with::<JointPositionControl<1>, _>(|state, _| {
+        let dq = state.meas.dq().expect("the speed is measured");
+        fastest = fastest.max(dq[0].abs());
+        cycles += 1;
+        ([0.9], cycles == 480)
+    })?;
+    assert!(
+        fastest > 0.95 && fastest <= 1.001,
+        "peak speed {fastest} m/s"
+    );
+    let q = position(&mut device)?;
+    assert!((q - 0.9).abs() < 0.01, "q = {q}");
+    Ok(())
+}
+
+#[test]
+fn move_to_returns_with_every_joint_in_position() -> anyhow::Result<()> {
+    let mut device = device()?;
+    MoveTo::<JointSpace<1>>::move_to(&mut device, [-0.7])?;
+    let q = position(&mut device)?;
+    assert!((q + 0.7).abs() <= ARRIVAL_WINDOW, "q = {q}");
+    for _ in 0..240 {
+        device.engine_mut().step()?;
+    }
+    let held = position(&mut device)?;
+    assert!((held + 0.7).abs() <= ARRIVAL_WINDOW, "held at {held}");
+    Ok(())
+}
+
+#[test]
+fn a_blocked_move_fails_after_the_arrival_timeout_and_stops_there() -> anyhow::Result<()> {
+    let mut engine = RsBullet::new(Mode::Direct)?;
+    let robot = load(&mut engine, 0.0)?;
+    // A fixed 0.2 m block centred at x = 0.5 stops the 0.1 m carriage at
+    // about x = 0.35.
+    let block = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/assets/camera_block.urdf"
+    );
+    let options = UrdfOptions {
+        base: Some(nalgebra::Isometry3::translation(0.5, 0.0, 0.0)),
+        use_fixed_base: true,
+        ..Default::default()
+    };
+    engine.client.load_urdf(block, Some(options))?;
+    let mut device = RsBulletDevice::new(engine, robot)?;
+    let t0 = device.engine().simulated_time();
+    let outcome = MoveTo::<JointSpace<1>>::move_to(&mut device, [0.9]);
+    let elapsed = device.engine().simulated_time() - t0;
+    assert!(
+        matches!(outcome, Err(RobotException::CommandException(_))),
+        "{outcome:?}"
+    );
+    assert!(elapsed > ARRIVAL_TIMEOUT, "failed after {elapsed:?}");
+    let stopped = position(&mut device)?;
+    assert!((stopped - 0.35).abs() < 0.02, "stopped at {stopped}");
+    for _ in 0..240 {
+        device.engine_mut().step()?;
+    }
+    let held = position(&mut device)?;
+    assert!((held - stopped).abs() < 1e-3, "{stopped} -> {held}");
     Ok(())
 }
