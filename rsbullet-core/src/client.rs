@@ -154,6 +154,26 @@ fn validate_motor_control_array(
             check_len(values)?;
             require_finite(values, "Motor targets must be finite")
         }
+        ControlModeArray::PositionVelocity {
+            target_position,
+            target_velocity,
+            maximum_velocity,
+        } => {
+            check_len(target_position)?;
+            check_len(target_velocity)?;
+            require_finite(target_position, "Motor positions must be finite")?;
+            require_finite(target_velocity, "Motor velocities must be finite")?;
+            if let Some(bounds) = maximum_velocity {
+                check_len(bounds)?;
+                // Infinity is Bullet's own default: no bound.
+                if bounds.iter().any(|bound| bound.is_nan() || *bound < 0.0) {
+                    return Err(invalid_argument(
+                        "Maximum motor velocities must be nonnegative",
+                    ));
+                }
+            }
+            Ok(())
+        }
         ControlModeArray::Pd {
             target_position,
             target_velocity,
@@ -2614,6 +2634,7 @@ impl PhysicsClient {
         let position_based = matches!(
             control_mode,
             ControlModeArray::Position(_)
+                | ControlModeArray::PositionVelocity { .. }
                 | ControlModeArray::Pd { .. }
                 | ControlModeArray::StablePd { .. }
         );
@@ -2662,6 +2683,38 @@ impl PhysicsClient {
                             info.u_index,
                             maximum_force.map_or(DEFAULT_FORCE, |forces| forces[i]),
                         );
+                    }
+                }
+            }
+            ControlModeArray::PositionVelocity {
+                target_position,
+                target_velocity,
+                maximum_velocity,
+            } => {
+                // Lengths were checked against the joints above.
+                for (i, joint) in joint_index.iter().copied().enumerate() {
+                    let info = self.get_joint_info(body_unique_id, joint)?;
+                    unsafe {
+                        ffi::b3JointControlSetDesiredPosition(
+                            command,
+                            info.q_index,
+                            target_position[i],
+                        );
+                        ffi::b3JointControlSetKp(command, info.u_index, DEFAULT_KP);
+                        ffi::b3JointControlSetDesiredVelocity(
+                            command,
+                            info.u_index,
+                            target_velocity[i],
+                        );
+                        ffi::b3JointControlSetKd(command, info.u_index, DEFAULT_KD);
+                        ffi::b3JointControlSetMaximumForce(
+                            command,
+                            info.u_index,
+                            maximum_force.map_or(DEFAULT_FORCE, |forces| forces[i]),
+                        );
+                        if let Some(bounds) = maximum_velocity {
+                            ffi::b3JointControlSetMaximumVelocity(command, info.u_index, bounds[i]);
+                        }
                     }
                 }
             }
