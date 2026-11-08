@@ -2362,10 +2362,7 @@ pub struct b3KeyboardEventsData {
 
 impl Default for b3KeyboardEventsData {
     fn default() -> Self {
-        b3KeyboardEventsData {
-            m_numKeyboardEvents: 0,
-            m_keyboardEvents: [].as_mut_ptr(),
-        }
+        b3KeyboardEventsData { m_numKeyboardEvents: 0, m_keyboardEvents: [].as_mut_ptr() }
     }
 }
 
@@ -2385,10 +2382,7 @@ pub struct b3MouseEventsData {
 
 impl Default for b3MouseEventsData {
     fn default() -> Self {
-        b3MouseEventsData {
-            m_numMouseEvents: 0,
-            m_mouseEvents: [].as_mut_ptr(),
-        }
+        b3MouseEventsData { m_numMouseEvents: 0, m_mouseEvents: [].as_mut_ptr() }
     }
 }
 
@@ -2420,10 +2414,7 @@ pub struct b3VisualShapeInformation {
 }
 impl Default for b3VisualShapeInformation {
     fn default() -> Self {
-        b3VisualShapeInformation {
-            m_numVisualShapes: 0,
-            m_visualShapeData: [].as_mut_ptr(),
-        }
+        b3VisualShapeInformation { m_numVisualShapes: 0, m_visualShapeData: [].as_mut_ptr() }
     }
 }
 impl Default for b3VisualShapeData {
@@ -2526,10 +2517,7 @@ pub struct b3UserConstraintState {
 }
 impl Default for b3UserConstraintState {
     fn default() -> Self {
-        b3UserConstraintState {
-            m_appliedConstraintForces: [0.; 6],
-            m_numDofs: 0,
-        }
+        b3UserConstraintState { m_appliedConstraintForces: [0.; 6], m_numDofs: 0 }
     }
 }
 #[repr(C)]
@@ -2653,10 +2641,7 @@ pub struct b3RaycastInformation {
 }
 impl Default for b3RaycastInformation {
     fn default() -> Self {
-        b3RaycastInformation {
-            m_numRayHits: 0,
-            m_rayHits: [].as_mut_ptr(),
-        }
+        b3RaycastInformation { m_numRayHits: 0, m_rayHits: [].as_mut_ptr() }
     }
 }
 #[repr(C)]
