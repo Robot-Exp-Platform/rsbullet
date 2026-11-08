@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use nalgebra::{Isometry3, Matrix3, Point3, Rotation3, Translation3, UnitQuaternion, Vector3};
 use roplat_behavior::{Camera, msgs::FrameId};
 use roplat_scene::points::depth_to_points;
-use rsbullet::{CameraSpec, Mode, RsBullet, UrdfOptions};
+use rsbullet::{CameraSpec, Intrinsics, Mode, RsBullet, UrdfOptions};
 
 fn asset(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -39,11 +39,12 @@ fn looking_down() -> CameraSpec {
     CameraSpec {
         width: 64,
         height: 48,
-        fov_y: 60f64.to_radians(),
+        intrinsics: Intrinsics::centred(64, 48, 60f64.to_radians()),
         near: 0.1,
         far: 3.0,
         pose: Isometry3::from_parts(Translation3::new(0.0, 0.0, 1.0), rotation),
         frame: FrameId::new(3),
+        depth_noise: None,
     }
 }
 

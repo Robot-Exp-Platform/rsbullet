@@ -14,7 +14,7 @@ use roplat_description::{Geometry, RobotModel};
 use roplat_grasp::{GraspOptions, PickOptions, grasps, plan_pick};
 use roplat_kinematics::{IkSearch, chain_ik_solutions};
 use roplat_scene::{CollisionCheck, EndEffector, PlanningScene, points::depth_to_points};
-use rsbullet::{CameraSpec, Mode, RsBullet, UrdfOptions};
+use rsbullet::{CameraSpec, Intrinsics, Mode, RsBullet, UrdfOptions};
 
 const PANDA: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -96,11 +96,12 @@ fn rendered_points() -> Vec<[f64; 3]> {
     let spec = CameraSpec {
         width: 96,
         height: 72,
-        fov_y: 60f64.to_radians(),
+        intrinsics: Intrinsics::centred(96, 72, 60f64.to_radians()),
         near: 0.1,
         far: 3.0,
         pose: Isometry3::from_parts(Translation3::new(0.5, 0.0, 1.2), rotation),
         frame: FrameId::new(1),
+        depth_noise: None,
     };
     let frame = sim.render_rgbd(&spec).unwrap().value;
     depth_to_points(&frame.depth, &spec.info(), spec.near..=spec.far, 1)
