@@ -3543,6 +3543,19 @@ impl PhysicsClient {
 /// | rayTest | **Implemented** | Single raycast |
 /// | rayTestBatch | **Implemented** | Batch raycasts |
 impl PhysicsClient {
+    /// The contact points of the last step, filtered by body and link, as
+    /// `PyBullet`'s `getContactPoints`.
+    ///
+    /// The forces (`normal_force`, `linear_friction_force_1` and `_2`, N)
+    /// are those of the last sub-step Bullet integrated. Bullet keeps each
+    /// point's impulse from the last sub-step only and divides it by the
+    /// whole physics step, so with `n` sub-steps
+    /// ([`PhysicsEngineParametersUpdate::num_sub_steps`]) it reports `1/n` of
+    /// the force; this method multiplies by `n`, the sub-step's share of the
+    /// step. For a resting or steady contact that is the force over the
+    /// whole step. For one that changes within the step (an impact, a foot
+    /// touching down) it is the force at the step's end, not the step's
+    /// average: Bullet keeps no impulses of the earlier sub-steps.
     pub fn get_contact_points(
         &mut self,
         body_a: Option<i32>,
@@ -3550,6 +3563,9 @@ impl PhysicsClient {
         link_a: Option<i32>,
         link_b: Option<i32>,
     ) -> BulletResult<Vec<ContactPoint>> {
+        // Query before initializing the contact command: Bullet shares one
+        // command buffer.
+        let sub_steps = self.get_physics_engine_parameters()?.num_sub_steps.max(1) as f64;
         self.ensure_can_submit()?;
         let command = unsafe { ffi::b3InitRequestContactPointInformation(self.handle) };
         unsafe {
@@ -3573,11 +3589,17 @@ impl PhysicsClient {
         )?;
 
         let mut info = MaybeUninit::<ffi::b3ContactInformation>::uninit();
-        unsafe {
+        let mut points = unsafe {
             ffi::b3GetContactPointInformation(self.handle, info.as_mut_ptr());
             let info = info.assume_init();
-            Ok(Self::collect_contact_points(&info))
+            Self::collect_contact_points(&info)
+        };
+        for point in &mut points {
+            point.normal_force *= sub_steps;
+            point.linear_friction_force_1 *= sub_steps;
+            point.linear_friction_force_2 *= sub_steps;
         }
+        Ok(points)
     }
 
     pub fn get_closest_points(
