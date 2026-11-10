@@ -94,10 +94,13 @@
 | `get_user_data_id` | `getUserDataId` | Implemented | 查询用户数据 ID。 | — |
 | `get_num_user_data` | `getNumUserData` | Implemented | 查询用户数据条数。 | — |
 | `get_user_data_info` | `getUserDataInfo` | Implemented | 列出数据详情。 | — |
-| `get_base_position_and_orientation` | `getBasePositionAndOrientation` | Implemented | 读取 base 坐标与姿态。 | Rust 返回 `Isometry3`. |
-| `get_base_velocity` | `getBaseVelocity` | Implemented | 获取 base 线/角速度。 | — |
-| `reset_base_position_and_orientation` | `resetBasePositionAndOrientation` | Implemented | 设置 base pose。 | — |
+| `get_base_position_and_orientation` | `getBasePositionAndOrientation` | Implemented | 读取 base 质心（惯性系）的位姿。 | Rust 返回 `Isometry3`；根连杆 `<inertial><origin>` 非零时不是 URDF 基座坐标系。 |
+| `get_base_velocity` | `getBaseVelocity` | Implemented | 获取 base 线/角速度。 | 线速度是质心的。 |
+| `reset_base_position_and_orientation` | `resetBasePositionAndOrientation` | Implemented | 设置 base 质心的位姿。 | — |
 | `reset_base_velocity` | `resetBaseVelocity` | Implemented | 设置 base 速度。 | — |
+| `get_base_frame_pose` | — | Implemented | 读取 base 的 URDF 坐标系位姿（`load_urdf` 放置的坐标系）。 | 质心位姿乘根连杆局部惯性系之逆，同一状态样本。 |
+| `get_base_frame_velocity` | — | Implemented | URDF 坐标系原点的线速度与角速度。 | `v_com + ω × (p_frame − p_com)`。 |
+| `reset_base_frame_pose` | — | Implemented | 按 URDF 坐标系设置 base 位姿。 | — |
 | `get_aabb` | `getAABB` | Implemented | 查询 AABB 包围盒。 | Rust 返回 `[f64; 6]`。 |
 | `get_num_joints` | `getNumJoints` | Implemented | 获取关节数。 | — |
 | `get_joint_info` | `getJointInfo` | Implemented | 获取关节元数据。 | Rust 结构体封装字段。 |
@@ -133,7 +136,7 @@
 
 | Rust API 名称 | PyBullet API 名称 | 状态 | 说明 | 其他 |
 | --- | --- | --- | --- | --- |
-| `get_contact_points` | `getContactPoints` | Implemented | 返回接触点列表。 | Rust 映射为结构体。 |
+| `get_contact_points` | `getContactPoints` | Implemented | 返回接触点列表。 | Rust 映射为结构体；有子步时力乘子步数，为最后一个子步的力（Bullet 按整步折算，只有 1/n）。 |
 | `get_closest_points` | `getClosestPoints` | Implemented | 计算最近距离。 | — |
 | `get_overlapping_objects` | `getOverlappingObjects` | Implemented | AABB 交叠查询。 | — |
 | `set_collision_filter_pair` | `setCollisionFilterPair` | Implemented | 控制两 body 是否碰撞。 | — |
