@@ -66,14 +66,19 @@ fn the_base_frame_is_where_the_urdf_is_loaded_and_the_centre_of_mass_is_not()
     let com = client.get_base_position_and_orientation(body)?;
     assert_pose_near("centre of mass", com, load_pose() * urdf_inertial(), TOL);
     let apart = (com.translation.vector - load_pose().translation.vector).norm();
-    assert!(apart > 0.1, "the centre of mass is {apart} m from the frame");
+    assert!(
+        apart > 0.1,
+        "the centre of mass is {apart} m from the frame"
+    );
 
     let frame = client.get_base_frame_pose(body)?;
     assert_pose_near("base frame", frame, load_pose(), TOL);
 
     // The hinge sits 0.3 m ahead of the base frame, so the arm's link frame
     // at zero angle is the base frame moved by the joint origin.
-    let arm = client.get_link_state(body, 0, true, false)?.world_link_frame;
+    let arm = client
+        .get_link_state(body, 0, true, false)?
+        .world_link_frame;
     assert_pose_near(
         "arm link frame",
         arm,
@@ -114,7 +119,9 @@ fn the_base_frame_holds_with_the_file_inertia_and_maximal_coordinates()
         TOL,
     );
     let com = client.get_base_position_and_orientation(body)?;
-    let turned = com.rotation.angle_to(&(load_pose() * urdf_inertial()).rotation);
+    let turned = com
+        .rotation
+        .angle_to(&(load_pose() * urdf_inertial()).rotation);
     assert!(turned > 0.05, "principal axes turned by {turned} rad");
 
     let rigid = load(
@@ -179,7 +186,11 @@ fn the_base_frame_velocity_is_the_frame_origins() -> Result<(), Box<dyn std::err
         Vector3::new(com_velocity[0], com_velocity[1], com_velocity[2]).norm() < TOL,
         "the centre of mass moves at {com_velocity:?}"
     );
-    assert_eq!(before[3..], com_velocity[3..], "the angular velocity is the body's");
+    assert_eq!(
+        before[3..],
+        com_velocity[3..],
+        "the angular velocity is the body's"
+    );
 
     let start = client.get_base_frame_pose(body)?.translation.vector;
     client.step_simulation()?;

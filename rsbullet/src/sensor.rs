@@ -127,8 +127,8 @@ impl RsBullet {
                 // Bullet's linear velocity is the centre of mass's.
                 let [vx, vy, vz, wx, wy, wz] = velocity;
                 let angular = na::Vector3::new(wx, wy, wz);
-                let offset = state.world_link_frame.translation.vector
-                    - state.world.translation.vector;
+                let offset =
+                    state.world_link_frame.translation.vector - state.world.translation.vector;
                 let linear = na::Vector3::new(vx, vy, vz) + angular.cross(&offset);
                 (state.world_link_frame, linear, angular)
             };

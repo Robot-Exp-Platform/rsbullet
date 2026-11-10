@@ -5732,7 +5732,9 @@ impl PhysicsClient {
         Ok(state)
     }
 
-    fn extract_base_state(status_handle: ffi::b3SharedMemoryStatusHandle) -> BulletResult<BaseSample> {
+    fn extract_base_state(
+        status_handle: ffi::b3SharedMemoryStatusHandle,
+    ) -> BulletResult<BaseSample> {
         if status_handle.is_null() {
             return Err(BulletError::NullPointer(
                 "Bullet returned a null status handle while reading base state",
