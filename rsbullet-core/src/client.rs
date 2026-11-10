@@ -3565,7 +3565,7 @@ impl PhysicsClient {
     ) -> BulletResult<Vec<ContactPoint>> {
         // Query before initializing the contact command: Bullet shares one
         // command buffer.
-        let sub_steps = self.get_physics_engine_parameters()?.num_sub_steps.max(1) as f64;
+        let sub_steps = f64::from(self.integration_sub_steps()?);
         self.ensure_can_submit()?;
         let command = unsafe { ffi::b3InitRequestContactPointInformation(self.handle) };
         unsafe {
@@ -4084,6 +4084,33 @@ impl PhysicsClient {
         } else {
             Ok(Cow::Owned(vec![default_value; expected_len]))
         }
+    }
+
+    /// How many sub-steps one physics step is integrated in: Bullet's
+    /// `num_sub_steps`, at least one.
+    ///
+    /// Read on its own rather than through
+    /// [`get_physics_engine_parameters`](Self::get_physics_engine_parameters):
+    /// Bullet's parameter status never sets the constraint solver type, so
+    /// that field holds whatever an earlier status left there, and the full
+    /// conversion rejects it when it is not a known solver.
+    fn integration_sub_steps(&mut self) -> BulletResult<i32> {
+        self.ensure_can_submit()?;
+        let command = unsafe { ffi::b3InitRequestPhysicsParamCommand(self.handle) };
+        let status = self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_REQUEST_PHYSICS_SIMULATION_PARAMETERS_COMPLETED,
+        )?;
+        let mut raw = MaybeUninit::<ffi::b3PhysicsSimulationParameters>::uninit();
+        let result =
+            unsafe { ffi::b3GetStatusPhysicsSimulationParameters(status.handle, raw.as_mut_ptr()) };
+        if result == 0 {
+            return Err(BulletError::CommandFailed {
+                message: "Failed to fetch physics simulation parameters",
+                code: result,
+            });
+        }
+        Ok(unsafe { raw.assume_init() }.m_numSimulationSubSteps.max(1))
     }
 
     fn collect_contact_points(info: &ffi::b3ContactInformation) -> Vec<ContactPoint> {
