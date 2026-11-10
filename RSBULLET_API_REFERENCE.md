@@ -30,7 +30,7 @@
 | `set_default_contact_erp` | `setDefaultContactERP` | Implemented | 修改接触 ERP。 | — |
 | `set_real_time_simulation` | `setRealTimeSimulation` | Implemented | 启用/关闭实时模式。 | Direct 模式下无效。 |
 | `set_physics_engine_parameter` | `setPhysicsEngineParameter` | Implemented | 批量更新物理参数。 | Rust 使用结构体封装选项。 |
-| `get_physics_engine_parameters` | `getPhysicsEngineParameters` | Implemented | 查询当前物理参数。 | 强类型结果；`constraint_solver_type` 为 `None`（Bullet 不回报该字段）。 |
+| `get_physics_engine_parameters` | `getPhysicsEngineParameters` | Implemented | 查询当前物理参数。 | 强类型结果；`constraint_solver_type`、`minimum_solver_island_size`、`report_solver_analytics`、`warm_starting_factor`、`sparse_sdf_voxel_size`、`articulated_warm_starting_factor` 为 `None`：Bullet 的应答不填这些字段，读到的是共享缓冲中别的应答的残留。 |
 | `set_internal_sim_flags` | `setInternalSimFlags` | Implemented | 设置内部调试标志。 | 高级功能，慎用。 |
 | `set_physics_engine_parameter` (多次调用) | `changeDynamics`（单项重载） | Implemented | 见 Dynamics。 | — |
 
