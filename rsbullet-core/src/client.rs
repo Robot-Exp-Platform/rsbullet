@@ -4034,7 +4034,11 @@ impl PhysicsClient {
             let forces = Self::slice_or_default(forces, u_size, info.max_force, "forces")?;
             for (dof, &force) in forces.iter().enumerate() {
                 unsafe {
-                    ffi::b3JointControlSetMaximumForce(command, u_index + dof as i32, force / scale);
+                    ffi::b3JointControlSetMaximumForce(
+                        command,
+                        u_index + dof as i32,
+                        force / scale,
+                    );
                 }
             }
         } else if control.is_velocity_based() {
