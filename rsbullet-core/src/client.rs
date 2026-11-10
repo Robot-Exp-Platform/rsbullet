@@ -2067,15 +2067,29 @@ impl PhysicsClient {
         unsafe { raw.assume_init() }.try_into()
     }
 
+    /// The joint's position, velocity, reaction wrench and motor force, as
+    /// `PyBullet`'s `getJointState`, except that `motor_torque` is the
+    /// motor's force (N or N m) with integration sub-steps too.
+    ///
+    /// Bullet keeps the motor's impulse of the last sub-step and divides it
+    /// by the whole physics step, so with `n` sub-steps
+    /// ([`PhysicsEngineParametersUpdate::num_sub_steps`]) it reports `1/n`
+    /// of the force; this method multiplies by `n`, as
+    /// [`get_contact_points`](Self::get_contact_points) does for contacts.
+    /// The value is the last sub-step's. `PyBullet` reports Bullet's number.
     pub fn get_joint_state(
         &mut self,
         body_unique_id: i32,
         joint_index: i32,
     ) -> BulletResult<JointState> {
+        // Query before the state request: Bullet shares one command buffer.
+        let sub_steps = f64::from(self.integration_sub_steps()?);
         let status = self.request_actual_state_status(body_unique_id)?;
-        self.read_joint_state(status.handle, joint_index)
+        self.read_joint_state(status.handle, joint_index, sub_steps)
     }
 
+    /// [`get_joint_state`](Self::get_joint_state) of several joints from
+    /// one state sample.
     pub fn get_joint_states(
         &mut self,
         body_unique_id: i32,
@@ -2084,22 +2098,28 @@ impl PhysicsClient {
         if joint_indices.is_empty() {
             return Ok(Vec::new());
         }
+        let sub_steps = f64::from(self.integration_sub_steps()?);
         let status = self.request_actual_state_status(body_unique_id)?;
         joint_indices
             .iter()
-            .map(|&index| self.read_joint_state(status.handle, index))
+            .map(|&index| self.read_joint_state(status.handle, index, sub_steps))
             .collect()
     }
 
+    /// As [`get_joint_state`](Self::get_joint_state) for a joint of any
+    /// number of degrees of freedom; `motor_torques` are scaled the same way.
     pub fn get_joint_state_multi_dof(
         &mut self,
         body_unique_id: i32,
         joint_index: i32,
     ) -> BulletResult<JointStateMultiDof> {
+        let sub_steps = f64::from(self.integration_sub_steps()?);
         let status = self.request_actual_state_status(body_unique_id)?;
-        self.read_joint_state_multi_dof(status.handle, joint_index)
+        self.read_joint_state_multi_dof(status.handle, joint_index, sub_steps)
     }
 
+    /// [`get_joint_state_multi_dof`](Self::get_joint_state_multi_dof) of
+    /// several joints from one state sample.
     pub fn get_joint_states_multi_dof(
         &mut self,
         body_unique_id: i32,
@@ -2108,10 +2128,11 @@ impl PhysicsClient {
         if joint_indices.is_empty() {
             return Ok(Vec::new());
         }
+        let sub_steps = f64::from(self.integration_sub_steps()?);
         let status = self.request_actual_state_status(body_unique_id)?;
         joint_indices
             .iter()
-            .map(|&index| self.read_joint_state_multi_dof(status.handle, index))
+            .map(|&index| self.read_joint_state_multi_dof(status.handle, index, sub_steps))
             .collect()
     }
 
@@ -2590,6 +2611,18 @@ impl PhysicsClient {
         })
     }
 
+    /// Sets one joint's motor, as `PyBullet`'s `setJointMotorControl2`.
+    ///
+    /// `maximum_force` (N or N m) is the most the motor exerts, with
+    /// integration sub-steps too. Bullet's position and velocity motors
+    /// take their limit as an impulse over the whole physics step and apply
+    /// it in every sub-step, so with `n` sub-steps
+    /// ([`PhysicsEngineParametersUpdate::num_sub_steps`]) a motor would
+    /// exert up to `n` times the limit; this method divides the limit by
+    /// `n` for [`ControlMode::Position`] and [`ControlMode::Velocity`].
+    /// The PD modes clamp an explicit force and torque mode applies one, so
+    /// they are passed as given. `PyBullet` passes Bullet the number as
+    /// given in every mode.
     pub fn set_joint_motor_control(
         &mut self,
         body_unique_id: i32,
@@ -2598,7 +2631,8 @@ impl PhysicsClient {
         maximum_force: Option<f64>,
     ) -> BulletResult<()> {
         validate_motor_control(control_mode, maximum_force)?;
-        self.ensure_can_submit()?;
+        // Query before the command: Bullet shares one command buffer.
+        let sub_steps = f64::from(self.integration_sub_steps()?);
         let info = self.get_joint_info(body_unique_id, joint_index)?;
         validate_scalar_motor_joint(&info, control_mode.is_position_based())?;
         let command = unsafe {
@@ -2627,7 +2661,7 @@ impl PhysicsClient {
                     ffi::b3JointControlSetDesiredVelocity(command, info.u_index, target_velocity);
 
                     ffi::b3JointControlSetKd(command, info.u_index, kd);
-                    ffi::b3JointControlSetMaximumForce(command, info.u_index, force);
+                    ffi::b3JointControlSetMaximumForce(command, info.u_index, force / sub_steps);
                 }
                 ControlMode::Pd {
                     target_position: pos,
@@ -2657,7 +2691,7 @@ impl PhysicsClient {
                 ControlMode::Velocity(vel) => {
                     ffi::b3JointControlSetDesiredVelocity(command, info.u_index, vel);
                     ffi::b3JointControlSetKd(command, info.u_index, kd);
-                    ffi::b3JointControlSetMaximumForce(command, info.u_index, force);
+                    ffi::b3JointControlSetMaximumForce(command, info.u_index, force / sub_steps);
                 }
                 ControlMode::Torque(f) => {
                     ffi::b3JointControlSetDesiredForceTorque(command, info.u_index, f);
@@ -2671,6 +2705,10 @@ impl PhysicsClient {
         Ok(())
     }
 
+    /// Sets several joints' motors in one command, as `PyBullet`'s
+    /// `setJointMotorControlArray`; `maximum_force` is the most each motor
+    /// exerts, with sub-steps too, as for
+    /// [`set_joint_motor_control`](Self::set_joint_motor_control).
     pub fn set_joint_motor_control_array(
         &mut self,
         body_unique_id: i32,
@@ -2703,6 +2741,9 @@ impl PhysicsClient {
                 position_based,
             )?;
         }
+        // Position and velocity motors take their limits per sub-step, as in
+        // `set_joint_motor_control`; the PD modes clamp an explicit force.
+        let sub_steps = f64::from(self.integration_sub_steps()?);
         let command = unsafe {
             ffi::b3JointControlCommandInit2(self.handle, body_unique_id, control_mode.as_raw())
         };
@@ -2740,7 +2781,7 @@ impl PhysicsClient {
                         ffi::b3JointControlSetMaximumForce(
                             command,
                             info.u_index,
-                            maximum_force.map_or(DEFAULT_FORCE, |forces| forces[i]),
+                            maximum_force.map_or(DEFAULT_FORCE, |forces| forces[i]) / sub_steps,
                         );
                     }
                 }
@@ -2769,7 +2810,7 @@ impl PhysicsClient {
                         ffi::b3JointControlSetMaximumForce(
                             command,
                             info.u_index,
-                            maximum_force.map_or(DEFAULT_FORCE, |forces| forces[i]),
+                            maximum_force.map_or(DEFAULT_FORCE, |forces| forces[i]) / sub_steps,
                         );
                         if let Some(bounds) = maximum_velocity {
                             ffi::b3JointControlSetMaximumVelocity(command, info.u_index, bounds[i]);
@@ -2867,7 +2908,7 @@ impl PhysicsClient {
                         ffi::b3JointControlSetMaximumForce(
                             command,
                             info.u_index,
-                            maximum_force.map_or(DEFAULT_FORCE, |forces| forces[i]),
+                            maximum_force.map_or(DEFAULT_FORCE, |forces| forces[i]) / sub_steps,
                         );
                     }
                 }
@@ -2899,19 +2940,21 @@ impl PhysicsClient {
     /// Submit native multi-DOF control. Velocity-only mode supports revolute and
     /// prismatic joints; Bullet ignores that mode for spherical joints, so it is
     /// rejected here. Spherical position and torque control use their own modes.
+    /// The position and velocity modes' `forces` are limits with sub-steps
+    /// too, as for [`set_joint_motor_control`](Self::set_joint_motor_control).
     pub fn set_joint_motor_control_multi_dof(
         &mut self,
         body_unique_id: i32,
         joint_index: i32,
         control: &MultiDofControl<'_>,
     ) -> BulletResult<()> {
-        self.ensure_can_submit()?;
+        let sub_steps = f64::from(self.integration_sub_steps()?);
         let info = self.get_joint_info(body_unique_id, joint_index)?;
         let command = unsafe {
             ffi::b3JointControlCommandInit2(self.handle, body_unique_id, control.as_raw())
         };
 
-        Self::configure_multi_dof_control(command, &info, control)?;
+        Self::configure_multi_dof_control(command, &info, control, sub_steps)?;
 
         self.submit_simple_command(
             command,
@@ -2930,7 +2973,7 @@ impl PhysicsClient {
         if entries.is_empty() {
             return Ok(());
         }
-        self.ensure_can_submit()?;
+        let sub_steps = f64::from(self.integration_sub_steps()?);
         // Initialize the command with the first entry's control mode (Bullet wants one mode per command).
         let command = unsafe {
             ffi::b3JointControlCommandInit2(
@@ -2950,7 +2993,7 @@ impl PhysicsClient {
                 });
             }
             let info = self.get_joint_info(body_unique_id, entry.joint_index)?;
-            Self::configure_multi_dof_control(command, &info, &entry.control)?;
+            Self::configure_multi_dof_control(command, &info, &entry.control, sub_steps)?;
         }
 
         self.submit_simple_command(
@@ -3833,10 +3876,13 @@ impl PhysicsClient {
         }
     }
 
+    /// `sub_steps` divides the motor force limits of the position and
+    /// velocity modes (see [`set_joint_motor_control`](Self::set_joint_motor_control)).
     fn configure_multi_dof_control(
         command: ffi::b3SharedMemoryCommandHandle,
         info: &JointInfo,
         control: &MultiDofControl<'_>,
+        sub_steps: f64,
     ) -> BulletResult<()> {
         // Bullet's velocity-only branch uses scalar joint motors and otherwise
         // acknowledges the command without controlling a spherical joint.
@@ -3978,10 +4024,17 @@ impl PhysicsClient {
                 ffi::b3JointControlSetKdMultiDof(command, u_index, kds.as_ptr(), u_size as i32);
             }
 
+            // Bullet's position motor takes its limit per sub-step; the PD
+            // modes clamp an explicit force.
+            let scale = if matches!(control, MultiDofControl::Position { .. }) {
+                sub_steps
+            } else {
+                1.0
+            };
             let forces = Self::slice_or_default(forces, u_size, info.max_force, "forces")?;
             for (dof, &force) in forces.iter().enumerate() {
                 unsafe {
-                    ffi::b3JointControlSetMaximumForce(command, u_index + dof as i32, force);
+                    ffi::b3JointControlSetMaximumForce(command, u_index + dof as i32, force / scale);
                 }
             }
         } else if control.is_velocity_based() {
@@ -4018,7 +4071,11 @@ impl PhysicsClient {
             let forces = Self::slice_or_default(forces, u_size, info.max_force, "forces")?;
             for (dof, &force) in forces.iter().enumerate() {
                 unsafe {
-                    ffi::b3JointControlSetMaximumForce(command, u_index + dof as i32, force);
+                    ffi::b3JointControlSetMaximumForce(
+                        command,
+                        u_index + dof as i32,
+                        force / sub_steps,
+                    );
                 }
             }
         } else if control.is_torque_based() {
@@ -5680,6 +5737,7 @@ impl PhysicsClient {
         &mut self,
         status_handle: ffi::b3SharedMemoryStatusHandle,
         joint_index: i32,
+        sub_steps: f64,
     ) -> BulletResult<JointState> {
         let mut raw = MaybeUninit::<ffi::b3JointSensorState>::uninit();
         let success = unsafe {
@@ -5696,7 +5754,7 @@ impl PhysicsClient {
             position: raw.m_joint_position,
             velocity: raw.m_joint_velocity,
             force_torque: raw.m_joint_force_torque,
-            motor_torque: raw.m_joint_motor_torque,
+            motor_torque: raw.m_joint_motor_torque * sub_steps,
         })
     }
 
@@ -5704,6 +5762,7 @@ impl PhysicsClient {
         &mut self,
         status_handle: ffi::b3SharedMemoryStatusHandle,
         joint_index: i32,
+        sub_steps: f64,
     ) -> BulletResult<JointStateMultiDof> {
         let mut raw = MaybeUninit::<ffi::b3JointSensorState2>::uninit();
         let success = unsafe {
@@ -5730,7 +5789,10 @@ impl PhysicsClient {
             positions: raw.m_joint_position[..q_len].to_vec(),
             velocities: raw.m_joint_velocity[..u_len].to_vec(),
             reaction_forces: raw.m_joint_reaction_force_torque,
-            motor_torques: raw.m_joint_motor_torque_multi_dof[..u_len].to_vec(),
+            motor_torques: raw.m_joint_motor_torque_multi_dof[..u_len]
+                .iter()
+                .map(|torque| torque * sub_steps)
+                .collect(),
         })
     }
 
