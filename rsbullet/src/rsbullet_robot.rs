@@ -607,9 +607,12 @@ where
     }
 }
 
+/// Queued controls run once per engine step; the period is
+/// [`DEFAULT_CONTROL_PERIOD`](crate::DEFAULT_CONTROL_PERIOD), Bullet's
+/// default step, whatever the world's step is.
 impl<R> Robot for RsBulletRobot<R> {
     type State = RsBulletRobotState;
-    const CONTROL_PERIOD: Duration = Duration::from_nanos(1_000_000_000 / 240);
+    const CONTROL_PERIOD: Duration = crate::DEFAULT_CONTROL_PERIOD;
 
     fn version() -> String {
         "RsBulletRobot".to_string()
@@ -984,7 +987,7 @@ fn disable_default_motor<const N: usize>(
 }
 
 /// Hold the measured position with the channel's effort limits.
-fn hold_measured_position<R: Joints<N>, const N: usize>(
+pub(crate) fn hold_measured_position<R: Joints<N>, const N: usize>(
     client: &mut PhysicsClient,
     body_id: i32,
     joint_indices: &[i32],
@@ -997,13 +1000,40 @@ fn hold_measured_position<R: Joints<N>, const N: usize>(
         ));
     }
     let measured = std::array::from_fn(|i| states[i].position);
+    command_positions::<R, N>(client, body_id, joint_indices, measured, [0.0; N])
+}
+
+/// Command the position motors towards `q` while moving at the feed-forward
+/// velocity `dq`, within the declared position limits and efforts, each
+/// joint's commanded speed bounded by its declared `dq_max`.
+///
+/// Bullet's position motor sets the joint speed it drives towards to
+/// `dq + kp (q - measured) / dt` with `kp = 0.1`; a constant target alone
+/// is reached in steps that each close a tenth of the error, and a moving
+/// one is followed only with its velocity fed forward. The speed bound
+/// stays on the motor for later commands (see
+/// [`ControlModeArray::PositionVelocity`]), so every position command of
+/// this crate's channels sets it.
+fn command_positions<R: Joints<N>, const N: usize>(
+    client: &mut PhysicsClient,
+    body_id: i32,
+    joint_indices: &[i32],
+    q: [f64; N],
+    dq: [f64; N],
+) -> BulletResult<()> {
+    let joints = checked_joints::<N>(joint_indices)?;
     let declared = R::JOINT_LIMITS;
-    let target = clamp_position(measured, declared.q_min, declared.q_max)?;
+    let q = clamp_position(q, declared.q_min, declared.q_max)?;
+    let dq = clamp_by(dq, declared.dq_max)?;
     let limits = joint_effort_limits(client, body_id, joint_indices, declared.tau_max)?;
     client.set_joint_motor_control_array(
         body_id,
         joints,
-        ControlModeArray::Position(&target),
+        ControlModeArray::PositionVelocity {
+            target_position: &q,
+            target_velocity: &dq,
+            maximum_velocity: Some(&declared.dq_max),
+        },
         Some(&limits),
     )
 }
@@ -1029,22 +1059,16 @@ where
         .joint)
     }
 
+    /// Position motors at the commanded positions, within the declared
+    /// position limits, the speed they drive at bounded by the declared
+    /// `dq_max`.
     fn apply(
         client: &mut PhysicsClient,
         body_id: i32,
         joint_indices: &[i32],
         command: [f64; N],
     ) -> BulletResult<()> {
-        let joints = checked_joints::<N>(joint_indices)?;
-        let declared = R::JOINT_LIMITS;
-        let command = clamp_position(command, declared.q_min, declared.q_max)?;
-        let limits = joint_effort_limits(client, body_id, joint_indices, declared.tau_max)?;
-        client.set_joint_motor_control_array(
-            body_id,
-            joints,
-            ControlModeArray::Position(&command),
-            Some(&limits),
-        )
+        command_positions::<R, N>(client, body_id, joint_indices, command, [0.0; N])
     }
 
     fn release(
@@ -1053,6 +1077,52 @@ where
         joint_indices: &[i32],
     ) -> BulletResult<()> {
         hold_measured_position::<R, N>(client, body_id, joint_indices)
+    }
+}
+
+/// A planned joint motion on the position motors: each cycle commands a
+/// position on the path and the path's velocity to the next cycle, fed
+/// forward. This crate's [`RsBulletDevice`](crate::RsBulletDevice) streams
+/// its `MoveTo` through it.
+///
+/// A session over it ends with the motors keeping their last command, so a
+/// motion that ends commanding its target at rest holds the target.
+pub(crate) struct JointMotion<const N: usize>;
+
+impl<const N: usize> ControlSpace for JointMotion<N> {
+    type Obs = JointState<N>;
+    /// The position and the feed-forward velocity.
+    type Command = ([f64; N], [f64; N]);
+}
+
+impl<R, const N: usize> RsBulletControlSpace<R> for JointMotion<N>
+where
+    R: Joints<N>,
+{
+    fn observe(
+        client: &mut PhysicsClient,
+        body_id: i32,
+        joint_indices: &[i32],
+        end_effector_link: i32,
+        state_cache: &Arc<Mutex<RsBulletRobotState>>,
+    ) -> BulletResult<JointState<N>> {
+        Ok(read_arm_state::<N>(
+            client,
+            body_id,
+            joint_indices,
+            end_effector_link,
+            state_cache,
+        )?
+        .joint)
+    }
+
+    fn apply(
+        client: &mut PhysicsClient,
+        body_id: i32,
+        joint_indices: &[i32],
+        (q, dq): ([f64; N], [f64; N]),
+    ) -> BulletResult<()> {
+        command_positions::<R, N>(client, body_id, joint_indices, q, dq)
     }
 }
 

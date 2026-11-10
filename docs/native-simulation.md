@@ -129,8 +129,40 @@ the joints are left holding their measured position, as a real arm holds after
 its control session; a faulted world is left as it is. The joint position,
 velocity, torque and arm-torque channels are provided. The torque channels
 command raw joint torque: unlike Franka's FCI, Bullet adds no gravity
-compensation. Joint `MoveTo` runs an S-curve through the position channel and
-returns after its last integration; Cartesian `MoveTo` is unsupported.
+compensation. Cartesian `MoveTo` is unsupported.
+
+Sessions keep to the model's declared `JointLimits`. Position commands, of
+the joint position channel and of the Cartesian pose channel's inverse
+kinematics, are clamped to the position limits, and Bullet's position motors
+are given each joint's `dq_max` as the bound of the speed they drive at, so a
+far target is approached at that speed rather than at whatever the effort
+allows. Velocity commands are clamped to `dq_max`, torque commands to the
+efforts. A torque session bounds no speed: Bullet has no per-joint speed bound
+for a joint without a motor, and the device does not stop a joint that
+exceeds `dq_max` as a real arm's safety controller would.
+
+Joint `MoveTo` returns once the joints are in position, as a real arm's motion
+does. It plans an S-curve with the motion limits from the measured position
+and streams it to the position motors, each cycle commanding the curve's
+position at the start of the cycle with the curve's mean velocity over the
+cycle fed forward. Bullet's position motor closes only a tenth of a position
+error per step (`kp = 0.1`), so a curve followed by position alone lags by
+about nine steps of motion: at a 4 ms step that left joints 7 to 11 mrad
+short of the target when the curve ended. Fed forward, the joints stay within
+0.15 mrad of the curve (a Panda under gravity at a 4 ms step). After the
+curve the target is commanded at rest until every joint is within
+`ARRIVAL_WINDOW` (1e-3 rad or m) of it; the joints then hold the target. The
+window is not tighter because the position motors do not settle exactly
+under a load: that Panda holds its joints up to 9e-5 rad off their targets. Joints that have not arrived `ARRIVAL_TIMEOUT` (1 s of simulated
+time) after the curve's end, as against an obstacle, fail the motion with
+`RobotException::CommandException` and are left holding where they stopped.
+
+`Robot::CONTROL_PERIOD` of an `RsBulletDevice<R>` is the model's
+`DeviceModel::CONTROL_PERIOD`, by default `DEFAULT_CONTROL_PERIOD` (1/240 s,
+Bullet's default step); every model type used with a device implements
+`DeviceModel`, an empty impl taking the default. A session runs one cycle
+per physics step, so the world's step should be set to that period; the
+device neither sets nor checks it.
 
 The device holds the world exclusively for the session, as a `ControlRhythm`
 holds its robot resource. Use `engine()` / `engine_mut()` between sessions and
@@ -173,7 +205,8 @@ steps the world and returns when the fingers come to rest:
 - `home_gripper` opens fully at `HOMING_SPEED`; `stop_gripper` holds the
   measured finger positions and releases a grasp without stepping.
 - During a gripper motion the controlled joints keep their last motor commands;
-  after a session or joint `MoveTo` they hold their measured position. Arm and
+  after a session they hold their measured position, after a joint `MoveTo`
+  its target. Arm and
   hand do not move at the same time, because one device owns the world.
 
 Code that takes the arm and the gripper as two separate resources, as with
@@ -200,6 +233,39 @@ session with `.realtime(true)` reports unsupported rather than block its
 executor. `RsBullet::clock()` is a `roplat_msgs::ManualClock` on
 the simulation clock: it reads `simulated_time()` after each completed
 integration and its observers, and a reset starts a new clock.
+
+## Simulated cameras
+
+`RsBullet::render_rgbd(&spec)` renders a `CameraSpec` with Bullet's software
+renderer (DIRECT works), and `RsBullet::camera(spec)` puts it behind the
+`roplat_behavior::Camera` contract. `spec.info()` is the frame's
+`CameraInfo`, and the image is the one it describes:
+
+- `Intrinsics { fx, fy, cx, cy, distortion }` are pixels in `CameraInfo`'s
+  convention, pixel centres on whole coordinates;
+  `Intrinsics::centred(width, height, fov_y)` is a square-pixel pinhole with
+  the principal point at the image centre. The renderer samples each pixel
+  off its centre, by half a pixel in each axis; the projection is placed to
+  make the samples the rays of the pixel centres, to within a few hundredths
+  of a pixel (`tests/camera_projection.rs`).
+- `Distortion::PlumbBob` and `Distortion::RationalPolynomial` take
+  `CameraInfo::d`'s coefficients. A distorted camera renders an undistorted
+  image twice as fine that covers every pixel's ray and takes each pixel from
+  the rendered pixel nearest its ray: rays land within about a quarter of a
+  pixel. The fisheye model is not offered.
+- Depth is the `z` of the point a pixel sees, in metres. Infinity is the one
+  missing value, as the contract has it: nothing before `far` (a surface at
+  the far plane counts as none), and no depth is ever a finite number beyond
+  `far`.
+- `DepthNoise { sigma, dropout, seed }` adds Gaussian noise with a standard
+  deviation of `sigma[0] + sigma[1] z + sigma[2] z²` and loses a share
+  `dropout` of the pixels. A pixel's noise is drawn from the seed, the frame's
+  simulated time and the pixel alone, so a run reproduces; a reading the
+  noise moves outside `near..=far` is missing.
+
+Not modelled: exposure, motion blur, rolling shutter, the occlusion shadows of
+stereo and structured-light cameras, multipath and flying pixels at depth
+edges.
 
 ## Failure, reset and limits
 

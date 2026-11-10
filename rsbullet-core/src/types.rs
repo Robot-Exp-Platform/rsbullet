@@ -1084,6 +1084,21 @@ pub enum ControlModeArray<'a> {
     Torque(&'a [f64]),
     /// Position Control with the desired joint position.
     Position(&'a [f64]),
+    /// Position control with a velocity feed-forward and a speed bound:
+    /// Bullet's position motor, as [`Position`](Self::Position) drives it
+    /// and with the same gains, moving each joint at `target_velocity`
+    /// plus a correction towards `target_position`. `Position` is this mode
+    /// with zero target velocity.
+    ///
+    /// `maximum_velocity` bounds the joint speed the motor commands, per
+    /// joint; `f64::INFINITY` leaves a joint unbounded. Bullet keeps the
+    /// bound on the joint's motor: a later position command without one
+    /// keeps it, and a velocity command clears it.
+    PositionVelocity {
+        target_position: &'a [f64],
+        target_velocity: &'a [f64],
+        maximum_velocity: Option<&'a [f64]>,
+    },
     /// PD Control
     Pd {
         /// desired target position
@@ -1116,7 +1131,7 @@ impl ControlModeArray<'_> {
         match self {
             ControlModeArray::Velocity(_) => 0,
             ControlModeArray::Torque(_) => 1,
-            ControlModeArray::Position(_) => 2,
+            ControlModeArray::Position(_) | ControlModeArray::PositionVelocity { .. } => 2,
             ControlModeArray::Pd { .. } => 3,
             ControlModeArray::StablePd { .. } => 4,
         }

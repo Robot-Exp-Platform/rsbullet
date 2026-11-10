@@ -63,17 +63,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56"
 
 [[package]]
-name = "async-trait"
-version = "0.1.89"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9035ad2d096bed7955a320ee7e2230574d28fd3c3a0f186cbea1ff3c7eed5dbb"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.111",
-]
-
-[[package]]
 name = "autocfg"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -929,12 +918,10 @@ checksum = "4e27ee8bb91ca0adcf0ecb116293afa12d393f9c2b9b9cd54d33e8078fe19839"
 name = "roplat"
 version = "0.6.0-rc.1"
 dependencies = [
- "async-trait",
  "bincode",
  "futures",
  "libc",
  "memmap2",
- "num-traits",
  "roplat_launch",
  "roplat_macros",
  "roplat_native",
@@ -952,13 +939,21 @@ dependencies = [
  "anyhow",
  "futures",
  "nalgebra",
- "paste",
  "roplat",
  "roplat_msgs",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
- "tokio",
+]
+
+[[package]]
+name = "roplat_control"
+version = "0.9.0"
+dependencies = [
+ "libc",
+ "nalgebra",
+ "roplat_behavior",
+ "winapi",
 ]
 
 [[package]]
@@ -969,6 +964,16 @@ dependencies = [
  "roplat_msgs",
  "thiserror 2.0.18",
  "urdf-rs",
+]
+
+[[package]]
+name = "roplat_grasp"
+version = "0.9.0"
+dependencies = [
+ "nalgebra",
+ "roplat_description",
+ "roplat_scene",
+ "roplat_trajectory",
 ]
 
 [[package]]
@@ -1029,6 +1034,7 @@ dependencies = [
  "nalgebra",
  "parry3d-f64",
  "roplat_description",
+ "roplat_msgs",
  "thiserror 2.0.18",
 ]
 
@@ -1050,8 +1056,21 @@ dependencies = [
  "copp",
  "nalgebra",
  "roplat",
- "roplat_behavior",
+ "roplat_msgs",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "roplat_world"
+version = "0.9.0"
+dependencies = [
+ "anyhow",
+ "futures",
+ "nalgebra",
+ "roplat",
+ "roplat_behavior",
+ "roplat_description",
+ "tokio",
 ]
 
 [[package]]
@@ -1062,10 +1081,13 @@ dependencies = [
  "nalgebra",
  "roplat",
  "roplat_behavior",
+ "roplat_control",
  "roplat_description",
+ "roplat_grasp",
  "roplat_kinematics",
  "roplat_scene",
  "roplat_trajectory",
+ "roplat_world",
  "rsbullet-core",
  "rsbullet_sys",
  "serde",
@@ -1080,6 +1102,7 @@ dependencies = [
  "bitflags",
  "nalgebra",
  "roplat_behavior",
+ "roplat_world",
  "rsbullet_sys",
 ]
 
@@ -1446,6 +1469,28 @@ dependencies = [
  "bytemuck",
  "safe_arch",
 ]
+
+[[package]]
+name = "winapi"
+version = "0.3.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c839a674fcd7a98952e593242ea400abe93992746761e38641405d28b00f419"
+dependencies = [
+ "winapi-i686-pc-windows-gnu",
+ "winapi-x86_64-pc-windows-gnu",
+]
+
+[[package]]
+name = "winapi-i686-pc-windows-gnu"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac3b87c63620426dd9b991e5ce0329eff545bccbbb34f3be09ff6fb6ab51b7b6"
+
+[[package]]
+name = "winapi-x86_64-pc-windows-gnu"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
 
 [[package]]
 name = "windows-core"
