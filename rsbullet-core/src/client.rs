@@ -1964,6 +1964,12 @@ impl PhysicsClient {
         Ok(Aabb { min: aabb_min, max: aabb_max })
     }
 
+    /// Moves the base's centre of mass to `position` with `orientation`
+    /// (`[x, y, z, w]`), as `PyBullet`'s `resetBasePositionAndOrientation`:
+    /// the pose
+    /// [`get_base_position_and_orientation`](Self::get_base_position_and_orientation)
+    /// reads. [`reset_base_frame_pose`](Self::reset_base_frame_pose) places
+    /// the URDF frame instead.
     pub fn reset_base_position_and_orientation(
         &mut self,
         body_unique_id: i32,
@@ -2109,19 +2115,72 @@ impl PhysicsClient {
             .collect()
     }
 
+    /// The pose of the base's centre of mass in the world, as `PyBullet`'s
+    /// `getBasePositionAndOrientation`: Bullet's own base frame, which is the
+    /// root link's inertial frame. It is the root link's URDF frame only when
+    /// the URDF puts the inertial frame there (`<inertial><origin>` zero);
+    /// [`get_base_frame_pose`](Self::get_base_frame_pose) is the URDF frame.
     pub fn get_base_position_and_orientation(
         &mut self,
         body_unique_id: i32,
     ) -> BulletResult<na::Isometry3<f64>> {
         let status = self.request_actual_state_status(body_unique_id)?;
-        let (base, _) = Self::extract_base_state(status.handle)?;
-        Ok(base)
+        Ok(Self::extract_base_state(status.handle)?.com)
     }
 
+    /// The base's velocity in the world, `[vx, vy, vz, wx, wy, wz]`, as
+    /// `PyBullet`'s `getBaseVelocity`: the linear part is the velocity of the
+    /// base's centre of mass.
+    /// [`get_base_frame_velocity`](Self::get_base_frame_velocity) is the
+    /// velocity of the URDF frame's origin.
     pub fn get_base_velocity(&mut self, body_unique_id: i32) -> BulletResult<[f64; 6]> {
         let status = self.request_actual_state_status(body_unique_id)?;
-        let (_, velocity) = Self::extract_base_state(status.handle)?;
-        Ok(velocity)
+        Ok(Self::extract_base_state(status.handle)?.velocity)
+    }
+
+    /// The pose of the base's URDF frame (the root link's frame) in the
+    /// world: the frame [`load_urdf`](Self::load_urdf) places at
+    /// [`UrdfOptions::base`], and the one the root's joints and the links'
+    /// `world_link_frame` are built on.
+    ///
+    /// It is the centre-of-mass pose of
+    /// [`get_base_position_and_orientation`](Self::get_base_position_and_orientation)
+    /// moved back by the root link's local inertial frame as Bullet loaded
+    /// it (the URDF's `<inertial><origin>`; with
+    /// [`LoadModelFlags::URDF_USE_INERTIA_FROM_FILE`] also turned to the
+    /// principal axes of a non-diagonal inertia), from the same state sample.
+    /// The two poses agree when that frame is the identity.
+    pub fn get_base_frame_pose(&mut self, body_unique_id: i32) -> BulletResult<na::Isometry3<f64>> {
+        let status = self.request_actual_state_status(body_unique_id)?;
+        Ok(Self::extract_base_state(status.handle)?.frame_pose())
+    }
+
+    /// The velocity of the base's URDF frame in the world,
+    /// `[vx, vy, vz, wx, wy, wz]`: the angular part is the body's, as from
+    /// [`get_base_velocity`](Self::get_base_velocity); the linear part is
+    /// the velocity of the URDF frame's origin, `v_com + ω × (p_frame −
+    /// p_com)`, which differs from the centre of mass's when the base turns
+    /// and the two points differ.
+    pub fn get_base_frame_velocity(&mut self, body_unique_id: i32) -> BulletResult<[f64; 6]> {
+        let status = self.request_actual_state_status(body_unique_id)?;
+        Ok(Self::extract_base_state(status.handle)?.frame_velocity())
+    }
+
+    /// Moves the base so that its URDF frame is at `pose`, as
+    /// [`load_urdf`](Self::load_urdf) places it;
+    /// [`reset_base_position_and_orientation`](Self::reset_base_position_and_orientation)
+    /// places the centre of mass instead (see
+    /// [`get_base_frame_pose`](Self::get_base_frame_pose)). Velocities and
+    /// joint positions are left as they are.
+    pub fn reset_base_frame_pose(
+        &mut self,
+        body_unique_id: i32,
+        pose: na::Isometry3<f64>,
+    ) -> BulletResult<()> {
+        let status = self.request_actual_state_status(body_unique_id)?;
+        let local_inertial = Self::extract_base_state(status.handle)?.local_inertial;
+        let (position, orientation) = isometry_to_raw_parts(&(pose * local_inertial));
+        self.reset_base_position_and_orientation(body_unique_id, position, orientation)
     }
 
     pub fn get_link_state(
@@ -5651,15 +5710,14 @@ impl PhysicsClient {
         Ok(state)
     }
 
-    fn extract_base_state(
-        status_handle: ffi::b3SharedMemoryStatusHandle,
-    ) -> BulletResult<(na::Isometry3<f64>, [f64; 6])> {
+    fn extract_base_state(status_handle: ffi::b3SharedMemoryStatusHandle) -> BulletResult<BaseSample> {
         if status_handle.is_null() {
             return Err(BulletError::NullPointer(
                 "Bullet returned a null status handle while reading base state",
             ));
         }
 
+        let mut root_local_inertial_frame: *const f64 = ptr::null();
         let mut actual_state_q: *const f64 = ptr::null();
         let mut actual_state_qdot: *const f64 = ptr::null();
 
@@ -5669,7 +5727,7 @@ impl PhysicsClient {
                 ptr::null_mut(),
                 ptr::null_mut(),
                 ptr::null_mut(),
-                ptr::null_mut(),
+                &raw mut root_local_inertial_frame,
                 &raw mut actual_state_q,
                 &raw mut actual_state_qdot,
                 ptr::null_mut(),
@@ -5688,12 +5746,18 @@ impl PhysicsClient {
                 "Bullet returned a null actual-state position pointer",
             ));
         }
+        if root_local_inertial_frame.is_null() {
+            return Err(BulletError::NullPointer(
+                "Bullet returned a null root local inertial frame",
+            ));
+        }
 
-        let mut position = [0.0; 3];
-        let mut orientation = [0.0; 4];
+        // Both are `[x, y, z, qx, qy, qz, qw]`.
+        let mut base = [0.0; 7];
+        let mut inertial = [0.0; 7];
         unsafe {
-            ptr::copy_nonoverlapping(actual_state_q, position.as_mut_ptr(), 3);
-            ptr::copy_nonoverlapping(actual_state_q.add(3), orientation.as_mut_ptr(), 4);
+            ptr::copy_nonoverlapping(actual_state_q, base.as_mut_ptr(), 7);
+            ptr::copy_nonoverlapping(root_local_inertial_frame, inertial.as_mut_ptr(), 7);
         }
 
         let mut velocity = [0.0; 6];
@@ -5703,13 +5767,37 @@ impl PhysicsClient {
             }
         }
 
-        Ok((
-            na::Isometry3::from_parts(
-                na::Translation3::from(position),
-                na::UnitQuaternion::from_quaternion(orientation.into()),
-            ),
+        Ok(BaseSample {
+            com: isometry_from_frame(&base),
             velocity,
-        ))
+            local_inertial: isometry_from_frame(&inertial),
+        })
+    }
+}
+
+/// One actual-state sample of a body's base.
+struct BaseSample {
+    /// The centre of mass, Bullet's base frame, in the world.
+    com: na::Isometry3<f64>,
+    /// `[vx, vy, vz, wx, wy, wz]` of the centre of mass in the world.
+    velocity: [f64; 6],
+    /// The centre of mass in the root link's URDF frame.
+    local_inertial: na::Isometry3<f64>,
+}
+
+impl BaseSample {
+    /// The root link's URDF frame in the world.
+    fn frame_pose(&self) -> na::Isometry3<f64> {
+        self.com * self.local_inertial.inverse()
+    }
+
+    /// The URDF frame origin's linear velocity and the body's angular one.
+    fn frame_velocity(&self) -> [f64; 6] {
+        let [vx, vy, vz, wx, wy, wz] = self.velocity;
+        let angular = na::Vector3::new(wx, wy, wz);
+        let offset = self.frame_pose().translation.vector - self.com.translation.vector;
+        let linear = na::Vector3::new(vx, vy, vz) + angular.cross(&offset);
+        [linear.x, linear.y, linear.z, wx, wy, wz]
     }
 }
 
