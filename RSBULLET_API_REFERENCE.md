@@ -30,7 +30,7 @@
 | `set_default_contact_erp` | `setDefaultContactERP` | Implemented | 修改接触 ERP。 | — |
 | `set_real_time_simulation` | `setRealTimeSimulation` | Implemented | 启用/关闭实时模式。 | Direct 模式下无效。 |
 | `set_physics_engine_parameter` | `setPhysicsEngineParameter` | Implemented | 批量更新物理参数。 | Rust 使用结构体封装选项。 |
-| `get_physics_engine_parameters` | `getPhysicsEngineParameters` | Implemented | 查询当前物理参数。 | 强类型结果。 |
+| `get_physics_engine_parameters` | `getPhysicsEngineParameters` | Implemented | 查询当前物理参数。 | 强类型结果；`constraint_solver_type` 为 `None`（Bullet 不回报该字段）。 |
 | `set_internal_sim_flags` | `setInternalSimFlags` | Implemented | 设置内部调试标志。 | 高级功能，慎用。 |
 | `set_physics_engine_parameter` (多次调用) | `changeDynamics`（单项重载） | Implemented | 见 Dynamics。 | — |
 
@@ -104,10 +104,10 @@
 | `get_aabb` | `getAABB` | Implemented | 查询 AABB 包围盒。 | Rust 返回 `[f64; 6]`。 |
 | `get_num_joints` | `getNumJoints` | Implemented | 获取关节数。 | — |
 | `get_joint_info` | `getJointInfo` | Implemented | 获取关节元数据。 | Rust 结构体封装字段。 |
-| `get_joint_state` | `getJointState` | Implemented | 查询单关节状态。 | — |
-| `get_joint_states` | `getJointStates` | Implemented | 批量查询关节状态。 | — |
-| `get_joint_state_multi_dof` | `getJointStateMultiDof` | Implemented | 多自由度关节状态。 | — |
-| `get_joint_states_multi_dof` | `getJointStatesMultiDof` | Implemented | 批量多自由度状态。 | — |
+| `get_joint_state` | `getJointState` | Implemented | 查询单关节状态。 | 有子步时 `motor_torque` 乘子步数，为电机的实际力（Bullet 按整步折算，只有 1/n）。 |
+| `get_joint_states` | `getJointStates` | Implemented | 批量查询关节状态。 | 同 `get_joint_state`。 |
+| `get_joint_state_multi_dof` | `getJointStateMultiDof` | Implemented | 多自由度关节状态。 | `motor_torques` 同 `get_joint_state`。 |
+| `get_joint_states_multi_dof` | `getJointStatesMultiDof` | Implemented | 批量多自由度状态。 | 同上。 |
 | `reset_joint_state` | `resetJointState` | Implemented | 设定单关节初始状态。 | — |
 | `reset_joint_state_multi_dof` | `resetJointStateMultiDof` | Implemented | 多自由度单关节重置。 | — |
 | `reset_joint_states_multi_dof` | `resetJointStatesMultiDof` | Implemented | 多自由度批量重置。 | — |
@@ -119,11 +119,11 @@
 | --- | --- | --- | --- | --- |
 | `change_dynamics` | `changeDynamics` | Implemented | 修改刚体动力学属性。 | Rust 与 `set_physics_engine_parameter` 不同；前者单刚体参数更新。 |
 | `get_dynamics_info` | `getDynamicsInfo` | Implemented | 查询刚体动力学信息。 | — |
-| `set_joint_motor_control` | `setJointMotorControl` | Optional | 旧版单关节控制。 | 建议改用 `_2`。 |
+| `set_joint_motor_control` | `setJointMotorControl` | Optional | 旧版单关节控制。 | 建议改用 `_2`。位置与速度模式的 `maximum_force` 在有子步时除以子步数下发，使电机最多出这么大的力（Bullet 按整步折算、每个子步都用，会放大 n 倍）；PD 与力矩模式原样下发。 |
 | `set_joint_motor_control2` | `setJointMotorControl2` | Implemented | 主控制 API。 | Rust 使用 `JointMotorControl2Options`。 |
-| `set_joint_motor_control_multi_dof` | `setJointMotorControlMultiDof` | Implemented | 多自由度单关节控制。 | — |
-| `set_joint_motor_control_multi_dof_array` | `setJointMotorControlMultiDofArray` | Implemented | 多自由度批量控制。 | — |
-| `set_joint_motor_control_array` | `setJointMotorControlArray` | Implemented | 多关节批量控制。 | — |
+| `set_joint_motor_control_multi_dof` | `setJointMotorControlMultiDof` | Implemented | 多自由度单关节控制。 | 力限同 `set_joint_motor_control`。 |
+| `set_joint_motor_control_multi_dof_array` | `setJointMotorControlMultiDofArray` | Implemented | 多自由度批量控制。 | 力限同 `set_joint_motor_control`。 |
+| `set_joint_motor_control_array` | `setJointMotorControlArray` | Implemented | 多关节批量控制。 | 力限同 `set_joint_motor_control`。 |
 | `apply_external_force` | `applyExternalForce` | Implemented | 对 body/链接施加外力。 | Rust 接受世界/局部 frame。 |
 | `apply_external_torque` | `applyExternalTorque` | Implemented | 施加外部力矩。 | — |
 | `calculate_inverse_dynamics` | `calculateInverseDynamics` | Implemented | 逆动力学求解。 | 返回 `Vec<f64>`。 |
