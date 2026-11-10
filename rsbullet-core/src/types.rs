@@ -167,6 +167,17 @@ impl TryFrom<i32> for JointFeedbackMode {
 }
 
 /// See [`SetPhysicsEngineParameterOptions`](`SetPhysicsEngineParameterOptions`) for a description of the parameters.
+/// The physics parameters as Bullet reports them
+/// ([`PhysicsClient::get_physics_engine_parameters`]).
+///
+/// The `Option` fields are those the pinned Bullet's parameter reply never
+/// sets (`m_constraintSolverType`, `m_minimumSolverIslandSize`,
+/// `m_reportSolverAnalytics`, `m_warmStartingFactor`,
+/// `m_sparseSdfVoxelSize`, `m_articulatedWarmStartingFactor` are absent from
+/// the server's reply code): in the reply they hold whatever an earlier reply
+/// left in the shared status buffer, another reply's data, so they are
+/// `None`. Values set with [`PhysicsEngineParametersUpdate`] are in effect
+/// all the same.
 #[derive(Debug, Clone)]
 pub struct PhysicsEngineParameters {
     pub fixed_time_step: Duration,
@@ -189,16 +200,23 @@ pub struct PhysicsEngineParameters {
     pub solver_residual_threshold: f64,
     pub contact_slop: f64,
     pub enable_sat: bool,
-    pub constraint_solver_type: ConstraintSolverType,
+    /// `None`: Bullet did not report it (see [`PhysicsEngineParameters`]).
+    /// The solver set with [`PhysicsEngineParametersUpdate`] is in effect.
+    pub constraint_solver_type: Option<ConstraintSolverType>,
     pub global_cfm: f64,
-    pub minimum_solver_island_size: usize,
-    pub report_solver_analytics: bool,
-    pub warm_starting_factor: f64,
-    pub sparse_sdf_voxel_size: f64,
+    /// `None`: Bullet did not report it (see [`PhysicsEngineParameters`]).
+    pub minimum_solver_island_size: Option<usize>,
+    /// `None`: Bullet did not report it (see [`PhysicsEngineParameters`]).
+    pub report_solver_analytics: Option<bool>,
+    /// `None`: Bullet did not report it (see [`PhysicsEngineParameters`]).
+    pub warm_starting_factor: Option<f64>,
+    /// `None`: Bullet did not report it (see [`PhysicsEngineParameters`]).
+    pub sparse_sdf_voxel_size: Option<f64>,
     pub num_non_contact_inner_iterations: usize,
     pub use_real_time_simulation: bool,
     pub gravity: [f64; 3],
-    pub articulated_warm_starting_factor: f64,
+    /// `None`: Bullet did not report it (see [`PhysicsEngineParameters`]).
+    pub articulated_warm_starting_factor: Option<f64>,
     pub internal_sim_flags: i32,
     pub friction_cfm: f64,
 }
@@ -228,16 +246,17 @@ impl TryFrom<ffi::b3PhysicsSimulationParameters> for PhysicsEngineParameters {
             solver_residual_threshold: b3.m_solverResidualThreshold,
             contact_slop: b3.m_contactSlop,
             enable_sat: b3.m_enableSAT != 0,
-            constraint_solver_type: b3.m_constraintSolverType.try_into()?,
+            // Bullet never fills these (see the struct).
+            constraint_solver_type: None,
             global_cfm: b3.m_defaultGlobalCFM,
-            minimum_solver_island_size: b3.m_minimumSolverIslandSize as usize,
-            report_solver_analytics: b3.m_reportSolverAnalytics != 0,
-            warm_starting_factor: b3.m_warmStartingFactor,
-            sparse_sdf_voxel_size: b3.m_sparseSdfVoxelSize,
+            minimum_solver_island_size: None,
+            report_solver_analytics: None,
+            warm_starting_factor: None,
+            sparse_sdf_voxel_size: None,
             num_non_contact_inner_iterations: b3.m_numNonContactInnerIterations as usize,
             use_real_time_simulation: b3.m_useRealTimeSimulation != 0,
             gravity: b3.m_gravityAcceleration,
-            articulated_warm_starting_factor: b3.m_articulatedWarmStartingFactor,
+            articulated_warm_starting_factor: None,
             internal_sim_flags: b3.m_internalSimFlags,
             friction_cfm: b3.m_frictionCFM,
         })

@@ -1964,6 +1964,12 @@ impl PhysicsClient {
         Ok(Aabb { min: aabb_min, max: aabb_max })
     }
 
+    /// Moves the base's centre of mass to `position` with `orientation`
+    /// (`[x, y, z, w]`), as `PyBullet`'s `resetBasePositionAndOrientation`:
+    /// the pose
+    /// [`get_base_position_and_orientation`](Self::get_base_position_and_orientation)
+    /// reads. [`reset_base_frame_pose`](Self::reset_base_frame_pose) places
+    /// the URDF frame instead.
     pub fn reset_base_position_and_orientation(
         &mut self,
         body_unique_id: i32,
@@ -2061,15 +2067,29 @@ impl PhysicsClient {
         unsafe { raw.assume_init() }.try_into()
     }
 
+    /// The joint's position, velocity, reaction wrench and motor force, as
+    /// `PyBullet`'s `getJointState`, except that `motor_torque` is the
+    /// motor's force (N or N m) with integration sub-steps too.
+    ///
+    /// Bullet keeps the motor's impulse of the last sub-step and divides it
+    /// by the whole physics step, so with `n` sub-steps
+    /// ([`PhysicsEngineParametersUpdate::num_sub_steps`]) it reports `1/n`
+    /// of the force; this method multiplies by `n`, as
+    /// [`get_contact_points`](Self::get_contact_points) does for contacts.
+    /// The value is the last sub-step's. `PyBullet` reports Bullet's number.
     pub fn get_joint_state(
         &mut self,
         body_unique_id: i32,
         joint_index: i32,
     ) -> BulletResult<JointState> {
+        // Query before the state request: Bullet shares one command buffer.
+        let sub_steps = f64::from(self.integration_sub_steps()?);
         let status = self.request_actual_state_status(body_unique_id)?;
-        self.read_joint_state(status.handle, joint_index)
+        self.read_joint_state(status.handle, joint_index, sub_steps)
     }
 
+    /// [`get_joint_state`](Self::get_joint_state) of several joints from
+    /// one state sample.
     pub fn get_joint_states(
         &mut self,
         body_unique_id: i32,
@@ -2078,22 +2098,28 @@ impl PhysicsClient {
         if joint_indices.is_empty() {
             return Ok(Vec::new());
         }
+        let sub_steps = f64::from(self.integration_sub_steps()?);
         let status = self.request_actual_state_status(body_unique_id)?;
         joint_indices
             .iter()
-            .map(|&index| self.read_joint_state(status.handle, index))
+            .map(|&index| self.read_joint_state(status.handle, index, sub_steps))
             .collect()
     }
 
+    /// As [`get_joint_state`](Self::get_joint_state) for a joint of any
+    /// number of degrees of freedom; `motor_torques` are scaled the same way.
     pub fn get_joint_state_multi_dof(
         &mut self,
         body_unique_id: i32,
         joint_index: i32,
     ) -> BulletResult<JointStateMultiDof> {
+        let sub_steps = f64::from(self.integration_sub_steps()?);
         let status = self.request_actual_state_status(body_unique_id)?;
-        self.read_joint_state_multi_dof(status.handle, joint_index)
+        self.read_joint_state_multi_dof(status.handle, joint_index, sub_steps)
     }
 
+    /// [`get_joint_state_multi_dof`](Self::get_joint_state_multi_dof) of
+    /// several joints from one state sample.
     pub fn get_joint_states_multi_dof(
         &mut self,
         body_unique_id: i32,
@@ -2102,26 +2128,80 @@ impl PhysicsClient {
         if joint_indices.is_empty() {
             return Ok(Vec::new());
         }
+        let sub_steps = f64::from(self.integration_sub_steps()?);
         let status = self.request_actual_state_status(body_unique_id)?;
         joint_indices
             .iter()
-            .map(|&index| self.read_joint_state_multi_dof(status.handle, index))
+            .map(|&index| self.read_joint_state_multi_dof(status.handle, index, sub_steps))
             .collect()
     }
 
+    /// The pose of the base's centre of mass in the world, as `PyBullet`'s
+    /// `getBasePositionAndOrientation`: Bullet's own base frame, which is the
+    /// root link's inertial frame. It is the root link's URDF frame only when
+    /// the URDF puts the inertial frame there (`<inertial><origin>` zero);
+    /// [`get_base_frame_pose`](Self::get_base_frame_pose) is the URDF frame.
     pub fn get_base_position_and_orientation(
         &mut self,
         body_unique_id: i32,
     ) -> BulletResult<na::Isometry3<f64>> {
         let status = self.request_actual_state_status(body_unique_id)?;
-        let (base, _) = Self::extract_base_state(status.handle)?;
-        Ok(base)
+        Ok(Self::extract_base_state(status.handle)?.com)
     }
 
+    /// The base's velocity in the world, `[vx, vy, vz, wx, wy, wz]`, as
+    /// `PyBullet`'s `getBaseVelocity`: the linear part is the velocity of the
+    /// base's centre of mass.
+    /// [`get_base_frame_velocity`](Self::get_base_frame_velocity) is the
+    /// velocity of the URDF frame's origin.
     pub fn get_base_velocity(&mut self, body_unique_id: i32) -> BulletResult<[f64; 6]> {
         let status = self.request_actual_state_status(body_unique_id)?;
-        let (_, velocity) = Self::extract_base_state(status.handle)?;
-        Ok(velocity)
+        Ok(Self::extract_base_state(status.handle)?.velocity)
+    }
+
+    /// The pose of the base's URDF frame (the root link's frame) in the
+    /// world: the frame [`load_urdf`](Self::load_urdf) places at
+    /// [`UrdfOptions::base`], and the one the root's joints and the links'
+    /// `world_link_frame` are built on.
+    ///
+    /// It is the centre-of-mass pose of
+    /// [`get_base_position_and_orientation`](Self::get_base_position_and_orientation)
+    /// moved back by the root link's local inertial frame as Bullet loaded
+    /// it (the URDF's `<inertial><origin>`; with
+    /// [`LoadModelFlags::URDF_USE_INERTIA_FROM_FILE`] also turned to the
+    /// principal axes of a non-diagonal inertia), from the same state sample.
+    /// The two poses agree when that frame is the identity.
+    pub fn get_base_frame_pose(&mut self, body_unique_id: i32) -> BulletResult<na::Isometry3<f64>> {
+        let status = self.request_actual_state_status(body_unique_id)?;
+        Ok(Self::extract_base_state(status.handle)?.frame_pose())
+    }
+
+    /// The velocity of the base's URDF frame in the world,
+    /// `[vx, vy, vz, wx, wy, wz]`: the angular part is the body's, as from
+    /// [`get_base_velocity`](Self::get_base_velocity); the linear part is
+    /// the velocity of the URDF frame's origin, `v_com + ω × (p_frame −
+    /// p_com)`, which differs from the centre of mass's when the base turns
+    /// and the two points differ.
+    pub fn get_base_frame_velocity(&mut self, body_unique_id: i32) -> BulletResult<[f64; 6]> {
+        let status = self.request_actual_state_status(body_unique_id)?;
+        Ok(Self::extract_base_state(status.handle)?.frame_velocity())
+    }
+
+    /// Moves the base so that its URDF frame is at `pose`, as
+    /// [`load_urdf`](Self::load_urdf) places it;
+    /// [`reset_base_position_and_orientation`](Self::reset_base_position_and_orientation)
+    /// places the centre of mass instead (see
+    /// [`get_base_frame_pose`](Self::get_base_frame_pose)). Velocities and
+    /// joint positions are left as they are.
+    pub fn reset_base_frame_pose(
+        &mut self,
+        body_unique_id: i32,
+        pose: na::Isometry3<f64>,
+    ) -> BulletResult<()> {
+        let status = self.request_actual_state_status(body_unique_id)?;
+        let local_inertial = Self::extract_base_state(status.handle)?.local_inertial;
+        let (position, orientation) = isometry_to_raw_parts(&(pose * local_inertial));
+        self.reset_base_position_and_orientation(body_unique_id, position, orientation)
     }
 
     pub fn get_link_state(
@@ -2531,6 +2611,18 @@ impl PhysicsClient {
         })
     }
 
+    /// Sets one joint's motor, as `PyBullet`'s `setJointMotorControl2`.
+    ///
+    /// `maximum_force` (N or N m) is the most the motor exerts, with
+    /// integration sub-steps too. Bullet's position and velocity motors
+    /// take their limit as an impulse over the whole physics step and apply
+    /// it in every sub-step, so with `n` sub-steps
+    /// ([`PhysicsEngineParametersUpdate::num_sub_steps`]) a motor would
+    /// exert up to `n` times the limit; this method divides the limit by
+    /// `n` for [`ControlMode::Position`] and [`ControlMode::Velocity`].
+    /// The PD modes clamp an explicit force and torque mode applies one, so
+    /// they are passed as given. `PyBullet` passes Bullet the number as
+    /// given in every mode.
     pub fn set_joint_motor_control(
         &mut self,
         body_unique_id: i32,
@@ -2539,7 +2631,8 @@ impl PhysicsClient {
         maximum_force: Option<f64>,
     ) -> BulletResult<()> {
         validate_motor_control(control_mode, maximum_force)?;
-        self.ensure_can_submit()?;
+        // Query before the command: Bullet shares one command buffer.
+        let sub_steps = f64::from(self.integration_sub_steps()?);
         let info = self.get_joint_info(body_unique_id, joint_index)?;
         validate_scalar_motor_joint(&info, control_mode.is_position_based())?;
         let command = unsafe {
@@ -2568,7 +2661,7 @@ impl PhysicsClient {
                     ffi::b3JointControlSetDesiredVelocity(command, info.u_index, target_velocity);
 
                     ffi::b3JointControlSetKd(command, info.u_index, kd);
-                    ffi::b3JointControlSetMaximumForce(command, info.u_index, force);
+                    ffi::b3JointControlSetMaximumForce(command, info.u_index, force / sub_steps);
                 }
                 ControlMode::Pd {
                     target_position: pos,
@@ -2598,7 +2691,7 @@ impl PhysicsClient {
                 ControlMode::Velocity(vel) => {
                     ffi::b3JointControlSetDesiredVelocity(command, info.u_index, vel);
                     ffi::b3JointControlSetKd(command, info.u_index, kd);
-                    ffi::b3JointControlSetMaximumForce(command, info.u_index, force);
+                    ffi::b3JointControlSetMaximumForce(command, info.u_index, force / sub_steps);
                 }
                 ControlMode::Torque(f) => {
                     ffi::b3JointControlSetDesiredForceTorque(command, info.u_index, f);
@@ -2612,6 +2705,10 @@ impl PhysicsClient {
         Ok(())
     }
 
+    /// Sets several joints' motors in one command, as `PyBullet`'s
+    /// `setJointMotorControlArray`; `maximum_force` is the most each motor
+    /// exerts, with sub-steps too, as for
+    /// [`set_joint_motor_control`](Self::set_joint_motor_control).
     pub fn set_joint_motor_control_array(
         &mut self,
         body_unique_id: i32,
@@ -2644,6 +2741,9 @@ impl PhysicsClient {
                 position_based,
             )?;
         }
+        // Position and velocity motors take their limits per sub-step, as in
+        // `set_joint_motor_control`; the PD modes clamp an explicit force.
+        let sub_steps = f64::from(self.integration_sub_steps()?);
         let command = unsafe {
             ffi::b3JointControlCommandInit2(self.handle, body_unique_id, control_mode.as_raw())
         };
@@ -2681,7 +2781,7 @@ impl PhysicsClient {
                         ffi::b3JointControlSetMaximumForce(
                             command,
                             info.u_index,
-                            maximum_force.map_or(DEFAULT_FORCE, |forces| forces[i]),
+                            maximum_force.map_or(DEFAULT_FORCE, |forces| forces[i]) / sub_steps,
                         );
                     }
                 }
@@ -2710,7 +2810,7 @@ impl PhysicsClient {
                         ffi::b3JointControlSetMaximumForce(
                             command,
                             info.u_index,
-                            maximum_force.map_or(DEFAULT_FORCE, |forces| forces[i]),
+                            maximum_force.map_or(DEFAULT_FORCE, |forces| forces[i]) / sub_steps,
                         );
                         if let Some(bounds) = maximum_velocity {
                             ffi::b3JointControlSetMaximumVelocity(command, info.u_index, bounds[i]);
@@ -2808,7 +2908,7 @@ impl PhysicsClient {
                         ffi::b3JointControlSetMaximumForce(
                             command,
                             info.u_index,
-                            maximum_force.map_or(DEFAULT_FORCE, |forces| forces[i]),
+                            maximum_force.map_or(DEFAULT_FORCE, |forces| forces[i]) / sub_steps,
                         );
                     }
                 }
@@ -2840,19 +2940,21 @@ impl PhysicsClient {
     /// Submit native multi-DOF control. Velocity-only mode supports revolute and
     /// prismatic joints; Bullet ignores that mode for spherical joints, so it is
     /// rejected here. Spherical position and torque control use their own modes.
+    /// The position and velocity modes' `forces` are limits with sub-steps
+    /// too, as for [`set_joint_motor_control`](Self::set_joint_motor_control).
     pub fn set_joint_motor_control_multi_dof(
         &mut self,
         body_unique_id: i32,
         joint_index: i32,
         control: &MultiDofControl<'_>,
     ) -> BulletResult<()> {
-        self.ensure_can_submit()?;
+        let sub_steps = f64::from(self.integration_sub_steps()?);
         let info = self.get_joint_info(body_unique_id, joint_index)?;
         let command = unsafe {
             ffi::b3JointControlCommandInit2(self.handle, body_unique_id, control.as_raw())
         };
 
-        Self::configure_multi_dof_control(command, &info, control)?;
+        Self::configure_multi_dof_control(command, &info, control, sub_steps)?;
 
         self.submit_simple_command(
             command,
@@ -2871,7 +2973,7 @@ impl PhysicsClient {
         if entries.is_empty() {
             return Ok(());
         }
-        self.ensure_can_submit()?;
+        let sub_steps = f64::from(self.integration_sub_steps()?);
         // Initialize the command with the first entry's control mode (Bullet wants one mode per command).
         let command = unsafe {
             ffi::b3JointControlCommandInit2(
@@ -2891,7 +2993,7 @@ impl PhysicsClient {
                 });
             }
             let info = self.get_joint_info(body_unique_id, entry.joint_index)?;
-            Self::configure_multi_dof_control(command, &info, &entry.control)?;
+            Self::configure_multi_dof_control(command, &info, &entry.control, sub_steps)?;
         }
 
         self.submit_simple_command(
@@ -3484,6 +3586,19 @@ impl PhysicsClient {
 /// | rayTest | **Implemented** | Single raycast |
 /// | rayTestBatch | **Implemented** | Batch raycasts |
 impl PhysicsClient {
+    /// The contact points of the last step, filtered by body and link, as
+    /// `PyBullet`'s `getContactPoints`.
+    ///
+    /// The forces (`normal_force`, `linear_friction_force_1` and `_2`, N)
+    /// are those of the last sub-step Bullet integrated. Bullet keeps each
+    /// point's impulse from the last sub-step only and divides it by the
+    /// whole physics step, so with `n` sub-steps
+    /// ([`PhysicsEngineParametersUpdate::num_sub_steps`]) it reports `1/n` of
+    /// the force; this method multiplies by `n`, the sub-step's share of the
+    /// step. For a resting or steady contact that is the force over the
+    /// whole step. For one that changes within the step (an impact, a foot
+    /// touching down) it is the force at the step's end, not the step's
+    /// average: Bullet keeps no impulses of the earlier sub-steps.
     pub fn get_contact_points(
         &mut self,
         body_a: Option<i32>,
@@ -3491,6 +3606,9 @@ impl PhysicsClient {
         link_a: Option<i32>,
         link_b: Option<i32>,
     ) -> BulletResult<Vec<ContactPoint>> {
+        // Query before initializing the contact command: Bullet shares one
+        // command buffer.
+        let sub_steps = f64::from(self.integration_sub_steps()?);
         self.ensure_can_submit()?;
         let command = unsafe { ffi::b3InitRequestContactPointInformation(self.handle) };
         unsafe {
@@ -3514,11 +3632,17 @@ impl PhysicsClient {
         )?;
 
         let mut info = MaybeUninit::<ffi::b3ContactInformation>::uninit();
-        unsafe {
+        let mut points = unsafe {
             ffi::b3GetContactPointInformation(self.handle, info.as_mut_ptr());
             let info = info.assume_init();
-            Ok(Self::collect_contact_points(&info))
+            Self::collect_contact_points(&info)
+        };
+        for point in &mut points {
+            point.normal_force *= sub_steps;
+            point.linear_friction_force_1 *= sub_steps;
+            point.linear_friction_force_2 *= sub_steps;
         }
+        Ok(points)
     }
 
     pub fn get_closest_points(
@@ -3752,10 +3876,13 @@ impl PhysicsClient {
         }
     }
 
+    /// `sub_steps` divides the motor force limits of the position and
+    /// velocity modes (see [`set_joint_motor_control`](Self::set_joint_motor_control)).
     fn configure_multi_dof_control(
         command: ffi::b3SharedMemoryCommandHandle,
         info: &JointInfo,
         control: &MultiDofControl<'_>,
+        sub_steps: f64,
     ) -> BulletResult<()> {
         // Bullet's velocity-only branch uses scalar joint motors and otherwise
         // acknowledges the command without controlling a spherical joint.
@@ -3897,10 +4024,21 @@ impl PhysicsClient {
                 ffi::b3JointControlSetKdMultiDof(command, u_index, kds.as_ptr(), u_size as i32);
             }
 
+            // Bullet's position motor takes its limit per sub-step; the PD
+            // modes clamp an explicit force.
+            let scale = if matches!(control, MultiDofControl::Position { .. }) {
+                sub_steps
+            } else {
+                1.0
+            };
             let forces = Self::slice_or_default(forces, u_size, info.max_force, "forces")?;
             for (dof, &force) in forces.iter().enumerate() {
                 unsafe {
-                    ffi::b3JointControlSetMaximumForce(command, u_index + dof as i32, force);
+                    ffi::b3JointControlSetMaximumForce(
+                        command,
+                        u_index + dof as i32,
+                        force / scale,
+                    );
                 }
             }
         } else if control.is_velocity_based() {
@@ -3937,7 +4075,11 @@ impl PhysicsClient {
             let forces = Self::slice_or_default(forces, u_size, info.max_force, "forces")?;
             for (dof, &force) in forces.iter().enumerate() {
                 unsafe {
-                    ffi::b3JointControlSetMaximumForce(command, u_index + dof as i32, force);
+                    ffi::b3JointControlSetMaximumForce(
+                        command,
+                        u_index + dof as i32,
+                        force / sub_steps,
+                    );
                 }
             }
         } else if control.is_torque_based() {
@@ -4003,6 +4145,33 @@ impl PhysicsClient {
         } else {
             Ok(Cow::Owned(vec![default_value; expected_len]))
         }
+    }
+
+    /// How many sub-steps one physics step is integrated in: Bullet's
+    /// `num_sub_steps`, at least one.
+    ///
+    /// Read on its own rather than through
+    /// [`get_physics_engine_parameters`](Self::get_physics_engine_parameters):
+    /// Bullet's parameter status never sets the constraint solver type, so
+    /// that field holds whatever an earlier status left there, and the full
+    /// conversion rejects it when it is not a known solver.
+    fn integration_sub_steps(&mut self) -> BulletResult<i32> {
+        self.ensure_can_submit()?;
+        let command = unsafe { ffi::b3InitRequestPhysicsParamCommand(self.handle) };
+        let status = self.submit_simple_command(
+            command,
+            ffi::EnumSharedMemoryServerStatus::CMD_REQUEST_PHYSICS_SIMULATION_PARAMETERS_COMPLETED,
+        )?;
+        let mut raw = MaybeUninit::<ffi::b3PhysicsSimulationParameters>::uninit();
+        let result =
+            unsafe { ffi::b3GetStatusPhysicsSimulationParameters(status.handle, raw.as_mut_ptr()) };
+        if result == 0 {
+            return Err(BulletError::CommandFailed {
+                message: "Failed to fetch physics simulation parameters",
+                code: result,
+            });
+        }
+        Ok(unsafe { raw.assume_init() }.m_numSimulationSubSteps.max(1))
     }
 
     fn collect_contact_points(info: &ffi::b3ContactInformation) -> Vec<ContactPoint> {
@@ -5572,6 +5741,7 @@ impl PhysicsClient {
         &mut self,
         status_handle: ffi::b3SharedMemoryStatusHandle,
         joint_index: i32,
+        sub_steps: f64,
     ) -> BulletResult<JointState> {
         let mut raw = MaybeUninit::<ffi::b3JointSensorState>::uninit();
         let success = unsafe {
@@ -5588,7 +5758,7 @@ impl PhysicsClient {
             position: raw.m_joint_position,
             velocity: raw.m_joint_velocity,
             force_torque: raw.m_joint_force_torque,
-            motor_torque: raw.m_joint_motor_torque,
+            motor_torque: raw.m_joint_motor_torque * sub_steps,
         })
     }
 
@@ -5596,6 +5766,7 @@ impl PhysicsClient {
         &mut self,
         status_handle: ffi::b3SharedMemoryStatusHandle,
         joint_index: i32,
+        sub_steps: f64,
     ) -> BulletResult<JointStateMultiDof> {
         let mut raw = MaybeUninit::<ffi::b3JointSensorState2>::uninit();
         let success = unsafe {
@@ -5622,7 +5793,10 @@ impl PhysicsClient {
             positions: raw.m_joint_position[..q_len].to_vec(),
             velocities: raw.m_joint_velocity[..u_len].to_vec(),
             reaction_forces: raw.m_joint_reaction_force_torque,
-            motor_torques: raw.m_joint_motor_torque_multi_dof[..u_len].to_vec(),
+            motor_torques: raw.m_joint_motor_torque_multi_dof[..u_len]
+                .iter()
+                .map(|torque| torque * sub_steps)
+                .collect(),
         })
     }
 
@@ -5653,13 +5827,14 @@ impl PhysicsClient {
 
     fn extract_base_state(
         status_handle: ffi::b3SharedMemoryStatusHandle,
-    ) -> BulletResult<(na::Isometry3<f64>, [f64; 6])> {
+    ) -> BulletResult<BaseSample> {
         if status_handle.is_null() {
             return Err(BulletError::NullPointer(
                 "Bullet returned a null status handle while reading base state",
             ));
         }
 
+        let mut root_local_inertial_frame: *const f64 = ptr::null();
         let mut actual_state_q: *const f64 = ptr::null();
         let mut actual_state_qdot: *const f64 = ptr::null();
 
@@ -5669,7 +5844,7 @@ impl PhysicsClient {
                 ptr::null_mut(),
                 ptr::null_mut(),
                 ptr::null_mut(),
-                ptr::null_mut(),
+                &raw mut root_local_inertial_frame,
                 &raw mut actual_state_q,
                 &raw mut actual_state_qdot,
                 ptr::null_mut(),
@@ -5688,12 +5863,18 @@ impl PhysicsClient {
                 "Bullet returned a null actual-state position pointer",
             ));
         }
+        if root_local_inertial_frame.is_null() {
+            return Err(BulletError::NullPointer(
+                "Bullet returned a null root local inertial frame",
+            ));
+        }
 
-        let mut position = [0.0; 3];
-        let mut orientation = [0.0; 4];
+        // Both are `[x, y, z, qx, qy, qz, qw]`.
+        let mut base = [0.0; 7];
+        let mut inertial = [0.0; 7];
         unsafe {
-            ptr::copy_nonoverlapping(actual_state_q, position.as_mut_ptr(), 3);
-            ptr::copy_nonoverlapping(actual_state_q.add(3), orientation.as_mut_ptr(), 4);
+            ptr::copy_nonoverlapping(actual_state_q, base.as_mut_ptr(), 7);
+            ptr::copy_nonoverlapping(root_local_inertial_frame, inertial.as_mut_ptr(), 7);
         }
 
         let mut velocity = [0.0; 6];
@@ -5703,13 +5884,37 @@ impl PhysicsClient {
             }
         }
 
-        Ok((
-            na::Isometry3::from_parts(
-                na::Translation3::from(position),
-                na::UnitQuaternion::from_quaternion(orientation.into()),
-            ),
+        Ok(BaseSample {
+            com: isometry_from_frame(&base),
             velocity,
-        ))
+            local_inertial: isometry_from_frame(&inertial),
+        })
+    }
+}
+
+/// One actual-state sample of a body's base.
+struct BaseSample {
+    /// The centre of mass, Bullet's base frame, in the world.
+    com: na::Isometry3<f64>,
+    /// `[vx, vy, vz, wx, wy, wz]` of the centre of mass in the world.
+    velocity: [f64; 6],
+    /// The centre of mass in the root link's URDF frame.
+    local_inertial: na::Isometry3<f64>,
+}
+
+impl BaseSample {
+    /// The root link's URDF frame in the world.
+    fn frame_pose(&self) -> na::Isometry3<f64> {
+        self.com * self.local_inertial.inverse()
+    }
+
+    /// The URDF frame origin's linear velocity and the body's angular one.
+    fn frame_velocity(&self) -> [f64; 6] {
+        let [vx, vy, vz, wx, wy, wz] = self.velocity;
+        let angular = na::Vector3::new(wx, wy, wz);
+        let offset = self.frame_pose().translation.vector - self.com.translation.vector;
+        let linear = na::Vector3::new(vx, vy, vz) + angular.cross(&offset);
+        [linear.x, linear.y, linear.z, wx, wy, wz]
     }
 }
 

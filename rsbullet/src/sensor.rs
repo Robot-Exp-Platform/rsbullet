@@ -104,21 +104,19 @@ impl RsBullet {
                 code: -1,
             });
         }
-        let base_inertial = local_inertial(&mut self.client, body, -1)?;
-
         let latest = Arc::new(Mutex::new(None));
         let sink = latest.clone();
         let nanos = self.simulated_nanos();
         let mut seq = 0;
         let mut previous: Option<(na::Vector3<f64>, i64)> = None;
         self.add_step_observer(move |client| {
-            // Link frame, centre of mass and the centre's world velocity.
-            let (link, com, velocity) = if link_index == -1 {
-                let com = client.get_base_position_and_orientation(body)?;
+            // The link's URDF frame and its origin's world velocity.
+            let (link, linear, angular) = if link_index == -1 {
+                let [vx, vy, vz, wx, wy, wz] = client.get_base_frame_velocity(body)?;
                 (
-                    com * base_inertial.inverse(),
-                    com,
-                    client.get_base_velocity(body)?,
+                    client.get_base_frame_pose(body)?,
+                    na::Vector3::new(vx, vy, vz),
+                    na::Vector3::new(wx, wy, wz),
                 )
             } else {
                 let state = client.get_link_state(body, link_index, true, true)?;
@@ -126,12 +124,14 @@ impl RsBullet {
                     message: "Bullet returned no link velocity",
                     code: -1,
                 })?;
-                (state.world_link_frame, state.world, velocity)
+                // Bullet's linear velocity is the centre of mass's.
+                let [vx, vy, vz, wx, wy, wz] = velocity;
+                let angular = na::Vector3::new(wx, wy, wz);
+                let offset =
+                    state.world_link_frame.translation.vector - state.world.translation.vector;
+                let linear = na::Vector3::new(vx, vy, vz) + angular.cross(&offset);
+                (state.world_link_frame, linear, angular)
             };
-            let [vx, vy, vz, wx, wy, wz] = velocity;
-            let angular = na::Vector3::new(wx, wy, wz);
-            let offset = link.translation.vector - com.translation.vector;
-            let linear = na::Vector3::new(vx, vy, vz) + angular.cross(&offset);
             let now = nanos.load(Ordering::Acquire);
 
             let rotation = link.rotation;
