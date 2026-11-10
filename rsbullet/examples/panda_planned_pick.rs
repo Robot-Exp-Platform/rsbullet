@@ -195,8 +195,9 @@ impl Planner {
             solution.rotation_error
         );
         let q: [f64; 7] = std::array::from_fn(|i| solution.q[i]);
+        let limits = Panda::JOINT_LIMITS;
         anyhow::ensure!(
-            (0..7).all(|i| (Panda::JOINT_MIN[i]..=Panda::JOINT_MAX[i]).contains(&q[i])),
+            (0..7).all(|i| (limits.q_min[i]..=limits.q_max[i]).contains(&q[i])),
             "IK for {at:?} left the joint limits: {q:?}"
         );
         Ok(q)
@@ -209,8 +210,8 @@ impl Planner {
         plan_joint_path(
             start,
             goal,
-            Panda::JOINT_MIN,
-            Panda::JOINT_MAX,
+            Panda::JOINT_LIMITS.q_min,
+            Panda::JOINT_LIMITS.q_max,
             |q| self.scene.is_free(q),
             options,
         )
