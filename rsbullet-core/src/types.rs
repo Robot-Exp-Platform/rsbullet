@@ -189,7 +189,11 @@ pub struct PhysicsEngineParameters {
     pub solver_residual_threshold: f64,
     pub contact_slop: f64,
     pub enable_sat: bool,
-    pub constraint_solver_type: ConstraintSolverType,
+    /// `None`: Bullet did not report it. The pinned Bullet never does: its
+    /// parameter status leaves the field as an earlier status left the
+    /// shared buffer, so a value read there would be another reply's data.
+    /// The solver set with [`PhysicsEngineParametersUpdate`] is in effect.
+    pub constraint_solver_type: Option<ConstraintSolverType>,
     pub global_cfm: f64,
     pub minimum_solver_island_size: usize,
     pub report_solver_analytics: bool,
@@ -228,7 +232,8 @@ impl TryFrom<ffi::b3PhysicsSimulationParameters> for PhysicsEngineParameters {
             solver_residual_threshold: b3.m_solverResidualThreshold,
             contact_slop: b3.m_contactSlop,
             enable_sat: b3.m_enableSAT != 0,
-            constraint_solver_type: b3.m_constraintSolverType.try_into()?,
+            // Bullet never fills `m_constraintSolverType` (see the field).
+            constraint_solver_type: None,
             global_cfm: b3.m_defaultGlobalCFM,
             minimum_solver_island_size: b3.m_minimumSolverIslandSize as usize,
             report_solver_analytics: b3.m_reportSolverAnalytics != 0,
