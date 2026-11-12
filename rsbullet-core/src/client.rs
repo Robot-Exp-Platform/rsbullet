@@ -212,6 +212,19 @@ fn validate_motor_control_array(
     }
 }
 
+/// Bullet keeps the meshes it reads from OBJ files in one process-wide table
+/// without a lock (`gCachedObjResults` in `LoadMeshFromObj.cpp`), so two
+/// clients reading meshes on different threads corrupt it and crash the
+/// process. Every command that can read a mesh file, or clear that table,
+/// holds this lock while Bullet runs it; other commands run in parallel.
+static MESH_CACHE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn mesh_cache() -> std::sync::MutexGuard<'static, ()> {
+    MESH_CACHE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 pub struct PhysicsClient {
     handle: ffi::b3PhysicsClientHandle,
     mode: Mode,
@@ -659,6 +672,7 @@ impl PhysicsClient {
         &mut self,
         update: &PhysicsEngineParametersUpdate,
     ) -> BulletResult<&mut Self> {
+        let _mesh_cache = mesh_cache();
         if let Some(dt) = update.fixed_time_step {
             require_positive_time_step(dt)?;
         }
@@ -756,6 +770,7 @@ impl PhysicsClient {
         file: impl AsRef<Path>,
         options: Option<impl Into<UrdfOptions>>,
     ) -> BulletResult<i32> {
+        let _mesh_cache = mesh_cache();
         self.ensure_can_submit()?;
         let file_c = Self::path_to_cstring(file.as_ref())?;
         let command = unsafe { ffi::b3LoadUrdfCommandInit(self.handle, file_c.as_ptr()) };
@@ -832,6 +847,7 @@ impl PhysicsClient {
         file: impl AsRef<Path>,
         options: impl Into<Option<SdfOptions>>,
     ) -> BulletResult<Vec<i32>> {
+        let _mesh_cache = mesh_cache();
         self.ensure_can_submit()?;
         let file_c = Self::path_to_cstring(file.as_ref())?;
         let command = unsafe { ffi::b3LoadSdfCommandInit(self.handle, file_c.as_ptr()) };
@@ -887,6 +903,7 @@ impl PhysicsClient {
         file: impl AsRef<Path>,
         options: impl Into<Option<MjcfOptions>>,
     ) -> BulletResult<Vec<i32>> {
+        let _mesh_cache = mesh_cache();
         self.ensure_can_submit()?;
         let file_c = Self::path_to_cstring(file.as_ref())?;
         let command = unsafe { ffi::b3LoadMJCFCommandInit(self.handle, file_c.as_ptr()) };
@@ -932,6 +949,7 @@ impl PhysicsClient {
     /// ```
     /// See also `save_and_restore.rs` example.
     pub fn load_bullet(&mut self, file: impl AsRef<Path>) -> BulletResult<Vec<i32>> {
+        let _mesh_cache = mesh_cache();
         self.ensure_can_submit()?;
         let file_c = Self::path_to_cstring(file.as_ref())?;
         let command = unsafe { ffi::b3LoadBulletCommandInit(self.handle, file_c.as_ptr()) };
@@ -1115,6 +1133,7 @@ impl PhysicsClient {
         geometry: &CollisionGeometry<'_>,
         options: Option<impl Into<CollisionShapeOptions>>,
     ) -> BulletResult<i32> {
+        let _mesh_cache = mesh_cache();
         self.ensure_can_submit()?;
         let mut scratch = GeometryScratch::default();
         let command = unsafe { ffi::b3CreateCollisionShapeCommandInit(self.handle) };
@@ -1158,6 +1177,7 @@ impl PhysicsClient {
             impl Clone + Into<CollisionShapeOptions>,
         )],
     ) -> BulletResult<i32> {
+        let _mesh_cache = mesh_cache();
         if options.is_empty() {
             return Err(BulletError::CommandFailed {
                 message: "Collision shape array requires at least one entry",
@@ -1234,6 +1254,7 @@ impl PhysicsClient {
         geometry: &VisualGeometry<'_>,
         options: Option<impl Into<VisualShapeOptions>>,
     ) -> BulletResult<i32> {
+        let _mesh_cache = mesh_cache();
         self.ensure_can_submit()?;
         let mut scratch = GeometryScratch::default();
         let command = unsafe { ffi::b3CreateVisualShapeCommandInit(self.handle) };
@@ -1282,6 +1303,7 @@ impl PhysicsClient {
         &mut self,
         options: &'_ [(VisualGeometry, Option<VisualShapeOptions>)],
     ) -> BulletResult<i32> {
+        let _mesh_cache = mesh_cache();
         if options.is_empty() {
             return Err(BulletError::CommandFailed {
                 message: "Visual shape array requires at least one entry",
@@ -1343,6 +1365,7 @@ impl PhysicsClient {
         link_index: i32,
         options: &ChangeVisualShapeOptions,
     ) -> BulletResult<&mut Self> {
+        let _mesh_cache = mesh_cache();
         self.ensure_can_submit()?;
         let command = unsafe {
             ffi::b3InitUpdateVisualShape2(
@@ -1661,6 +1684,7 @@ impl PhysicsClient {
     }
 
     pub fn load_texture(&mut self, filename: &str) -> BulletResult<i32> {
+        let _mesh_cache = mesh_cache();
         self.ensure_can_submit()?;
         let filename_c = CString::new(filename)?;
         let command = unsafe { ffi::b3InitLoadTexture(self.handle, filename_c.as_ptr()) };
