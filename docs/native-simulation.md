@@ -302,6 +302,29 @@ commands and actual model dynamics instead. Queued control submission is not a
 blocking hardware control session and is not completion of physical motion;
 `RsBulletDevice` provides both.
 
+## Worlds on several threads
+
+Each `PhysicsClient` in DIRECT mode owns its own server, and clients on
+different threads may build and step their worlds at the same time. Bullet
+keeps three things for the whole process, not per server: the OBJ meshes and
+the textures it has read (two hash maps without a lock) and the additional
+search path. Filling the maps from two threads at once corrupted the heap.
+
+- Commands that can look a file up or fill those maps take turns across the
+  process: loading URDF, SDF, MJCF and `.bullet` files, restoring a state from
+  a file, creating collision shapes, visual shapes and bodies, loading
+  textures, and setting physics parameters. Stepping, queries, control and
+  rendering run in parallel.
+- Each client keeps its own search path and sets it again before each of
+  those commands.
+- Some parameters stay process-wide, as in Bullet: `contact_breaking_threshold`
+  and `enable_file_caching` of `set_physics_engine_parameter`, and
+  `set_internal_sim_flags`. A value set through one client holds for all.
+- Turns are taken among the clients of one process only.
+
+`rsbullet-core/tests/parallel_worlds.rs` builds meshed worlds on eight threads
+at once; before these turns it crashed the process in every run.
+
 ## Preserve useful evidence
 
 Keep source/lock/toolchain/model revisions, initial conditions, physics dt,
