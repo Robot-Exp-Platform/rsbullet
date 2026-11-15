@@ -7,7 +7,10 @@ use std::{
     os::raw::c_char,
     path::{Path, PathBuf},
     ptr, slice,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::{
+        Mutex, MutexGuard, PoisonError,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::Duration,
 };
 
@@ -212,15 +215,69 @@ fn validate_motor_control_array(
     }
 }
 
+/// Bullet keeps some state for the whole process, not per physics server,
+/// and guards none of it:
+///
+/// - the Wavefront OBJ meshes and the textures it has read, in two hash
+///   maps (`gCachedObjResults` in `LoadMeshFromObj.cpp`,
+///   `gCachedTextureResults` in `b3ImportMeshUtility.cpp`). Loading a
+///   model, creating a mesh shape and creating a body with mesh visuals
+///   fill them; `enable_file_caching: Some(false)` clears the first.
+///   Two threads filling them at once corrupt the heap.
+/// - the additional search path (`sAdditionalSearchPath` in
+///   `b3ResourcePath.cpp`), which every file lookup reads, so the path one
+///   client sets is the path every client's next lookup uses.
+///
+/// Every command that can look a file up, create a body or clear the maps
+/// runs while it holds this lock, after setting the search path to its own
+/// client's (see [`PhysicsClient::hold_process_state`]). Other commands,
+/// stepping among them, run in parallel.
+static PROCESS_STATE: Mutex<()> = Mutex::new(());
+
+/// Bullet's search path limit (`MAX_FILENAME_LENGTH` in
+/// `SharedMemoryCommands.h`): a longer path is not sent at all.
+const MAX_SEARCH_PATH_BYTES: usize = 1024;
+
+/// A connection to a physics server.
+///
+/// # Threads
+///
+/// A client moves between threads but is used from one at a time. Clients
+/// on different threads, each with its own DIRECT server, may build and step
+/// their worlds at the same time:
+///
+/// - Loading models, creating shapes and bodies, loading textures and
+///   setting physics parameters take turns across the process, because
+///   Bullet keeps the meshes and textures it has read in tables shared by
+///   every server in the process. Everything else runs in parallel.
+/// - Each client keeps its own additional search path
+///   ([`set_additional_search_path`](Self::set_additional_search_path)), set
+///   again before each of its commands that looks a file up.
+/// - These parameters stay process-wide, as in Bullet: a value set through
+///   one client holds for every client in the process. They are
+///   `contact_breaking_threshold` and `enable_file_caching` of
+///   [`set_physics_engine_parameter`](Self::set_physics_engine_parameter),
+///   and [`set_internal_sim_flags`](Self::set_internal_sim_flags).
+/// - Turns are taken only among the clients of this process. A server in
+///   another process orders its own clients' commands.
 pub struct PhysicsClient {
     handle: ffi::b3PhysicsClientHandle,
     mode: Mode,
+    /// This client's additional search path; empty for none.
+    search_path: CString,
 }
 
 // SAFETY: PhysicsClient is a thin wrapper around an opaque Bullet C API handle.
-// Each client handle is an independent instance with a single owner at any time,
-// so moving it between threads (Send) is safe. It is not Sync: it must not be used from several threads at once.
+// Each client handle has a single owner at any time, so moving it between
+// threads (Send) is safe; the state Bullet shares between handles is behind
+// PROCESS_STATE. It is not Sync: it must not be used from several threads at once.
 unsafe impl Send for PhysicsClient {}
+
+/// Holds [`PROCESS_STATE`]; the unit it guards keeps no invariant a panic
+/// could break, so a poisoned lock is taken as it is.
+fn process_state() -> MutexGuard<'static, ()> {
+    PROCESS_STATE.lock().unwrap_or_else(PoisonError::into_inner)
+}
 
 // Per-process GUI guard: 0 = free, 1 = occupied
 static GUI_GUARD: AtomicUsize = AtomicUsize::new(0);
@@ -471,7 +528,7 @@ impl PhysicsClient {
         if reserved_gui {
             GUI_CLIENTS.fetch_add(1, Ordering::SeqCst);
         }
-        let mut client = PhysicsClient { handle, mode };
+        let mut client = PhysicsClient { handle, mode, search_path: CString::default() };
         client.ensure_can_submit()?;
 
         unsafe {
@@ -655,6 +712,9 @@ impl PhysicsClient {
     }
 
     /// Apply a batch of physics engine parameters, mirroring `PyBullet`'s `setPhysicsEngineParameter`.
+    ///
+    /// `contact_breaking_threshold` and `enable_file_caching` hold for every
+    /// client in the process; see [Threads](Self#threads).
     pub fn set_physics_engine_parameter(
         &mut self,
         update: &PhysicsEngineParametersUpdate,
@@ -662,6 +722,8 @@ impl PhysicsClient {
         if let Some(dt) = update.fixed_time_step {
             require_positive_time_step(dt)?;
         }
+        // Disabling file caching clears Bullet's process-wide mesh table.
+        let _process = process_state();
         self.ensure_can_submit()?;
         let command = unsafe { ffi::b3InitPhysicsParamCommand(self.handle) };
         Self::apply_physics_engine_update(command, update);
@@ -693,7 +755,8 @@ impl PhysicsClient {
         unsafe { raw.assume_init() }.try_into()
     }
 
-    /// Set internal simulation flags (expert-level API).
+    /// Set internal simulation flags (expert-level API). The flags hold for
+    /// every client in the process; see [Threads](Self#threads).
     pub fn set_internal_sim_flags(&mut self, flags: i32) -> BulletResult<&mut Self> {
         self.ensure_can_submit()?;
         let command = unsafe { ffi::b3InitPhysicsParamCommand(self.handle) };
@@ -756,7 +819,7 @@ impl PhysicsClient {
         file: impl AsRef<Path>,
         options: Option<impl Into<UrdfOptions>>,
     ) -> BulletResult<i32> {
-        self.ensure_can_submit()?;
+        let _process = self.hold_process_state()?;
         let file_c = Self::path_to_cstring(file.as_ref())?;
         let command = unsafe { ffi::b3LoadUrdfCommandInit(self.handle, file_c.as_ptr()) };
 
@@ -832,7 +895,7 @@ impl PhysicsClient {
         file: impl AsRef<Path>,
         options: impl Into<Option<SdfOptions>>,
     ) -> BulletResult<Vec<i32>> {
-        self.ensure_can_submit()?;
+        let _process = self.hold_process_state()?;
         let file_c = Self::path_to_cstring(file.as_ref())?;
         let command = unsafe { ffi::b3LoadSdfCommandInit(self.handle, file_c.as_ptr()) };
 
@@ -887,7 +950,7 @@ impl PhysicsClient {
         file: impl AsRef<Path>,
         options: impl Into<Option<MjcfOptions>>,
     ) -> BulletResult<Vec<i32>> {
-        self.ensure_can_submit()?;
+        let _process = self.hold_process_state()?;
         let file_c = Self::path_to_cstring(file.as_ref())?;
         let command = unsafe { ffi::b3LoadMJCFCommandInit(self.handle, file_c.as_ptr()) };
 
@@ -932,7 +995,7 @@ impl PhysicsClient {
     /// ```
     /// See also `save_and_restore.rs` example.
     pub fn load_bullet(&mut self, file: impl AsRef<Path>) -> BulletResult<Vec<i32>> {
-        self.ensure_can_submit()?;
+        let _process = self.hold_process_state()?;
         let file_c = Self::path_to_cstring(file.as_ref())?;
         let command = unsafe { ffi::b3LoadBulletCommandInit(self.handle, file_c.as_ptr()) };
         let status = self.submit_simple_command(
@@ -974,6 +1037,12 @@ impl PhysicsClient {
         state_id: Option<i32>,
         file: Option<impl AsRef<Path>>,
     ) -> BulletResult<()> {
+        // A file is looked up on the search path; a state in memory is not.
+        let _process = if file.is_some() {
+            Some(self.hold_process_state()?)
+        } else {
+            None
+        };
         self.ensure_can_submit()?;
         let command = unsafe { ffi::b3LoadStateCommandInit(self.handle) };
 
@@ -1027,18 +1096,45 @@ impl PhysicsClient {
         self.set_additional_search_path(Self::bullet_data_path())
     }
 
+    /// Sets the directory where this client's later commands look up the
+    /// files they name with a relative path, after the working directory.
+    ///
+    /// The path is this client's, not the process's: Bullet keeps one search
+    /// path for the whole process, so each command of this client that looks
+    /// a file up sets it again first (see [Threads](Self#threads)). A path of
+    /// 1024 bytes or more is refused, since Bullet would not send it.
     pub fn set_additional_search_path(
         &mut self,
         path: impl AsRef<Path>,
     ) -> BulletResult<&mut Self> {
-        self.ensure_can_submit()?;
         let path_c = Self::path_to_cstring(path.as_ref())?;
-        let command = unsafe { ffi::b3SetAdditionalSearchPath(self.handle, path_c.as_ptr()) };
+        if path_c.as_bytes().len() >= MAX_SEARCH_PATH_BYTES {
+            return Err(invalid_argument(
+                "Search path must be shorter than 1024 bytes",
+            ));
+        }
+        let previous = std::mem::replace(&mut self.search_path, path_c);
+        if let Err(error) = self.hold_process_state() {
+            self.search_path = previous;
+            return Err(error);
+        }
+        Ok(self)
+    }
+
+    /// Takes the lock on Bullet's process-wide state ([`PROCESS_STATE`]) and
+    /// sets Bullet's search path to this client's. The command that follows
+    /// runs while the returned guard lives, so no other client of the
+    /// process fills Bullet's mesh tables or moves the search path meanwhile.
+    fn hold_process_state(&mut self) -> BulletResult<MutexGuard<'static, ()>> {
+        let process = process_state();
+        self.ensure_can_submit()?;
+        let command =
+            unsafe { ffi::b3SetAdditionalSearchPath(self.handle, self.search_path.as_ptr()) };
         self.submit_simple_command(
             command,
             ffi::EnumSharedMemoryServerStatus::CMD_CLIENT_COMMAND_COMPLETED,
         )?;
-        Ok(self)
+        Ok(process)
     }
 
     pub fn bullet_data_path() -> PathBuf {
@@ -1115,7 +1211,7 @@ impl PhysicsClient {
         geometry: &CollisionGeometry<'_>,
         options: Option<impl Into<CollisionShapeOptions>>,
     ) -> BulletResult<i32> {
-        self.ensure_can_submit()?;
+        let _process = self.hold_process_state()?;
         let mut scratch = GeometryScratch::default();
         let command = unsafe { ffi::b3CreateCollisionShapeCommandInit(self.handle) };
         let shape_index = self.add_collision_geometry(command, geometry, &mut scratch)?;
@@ -1165,7 +1261,7 @@ impl PhysicsClient {
             });
         }
 
-        self.ensure_can_submit()?;
+        let _process = self.hold_process_state()?;
         let mut scratch = GeometryScratch::default();
         let command = unsafe { ffi::b3CreateCollisionShapeCommandInit(self.handle) };
 
@@ -1234,7 +1330,7 @@ impl PhysicsClient {
         geometry: &VisualGeometry<'_>,
         options: Option<impl Into<VisualShapeOptions>>,
     ) -> BulletResult<i32> {
-        self.ensure_can_submit()?;
+        let _process = self.hold_process_state()?;
         let mut scratch = GeometryScratch::default();
         let command = unsafe { ffi::b3CreateVisualShapeCommandInit(self.handle) };
 
@@ -1289,7 +1385,7 @@ impl PhysicsClient {
             });
         }
 
-        self.ensure_can_submit()?;
+        let _process = self.hold_process_state()?;
         let mut scratch = GeometryScratch::default();
         let command = unsafe { ffi::b3CreateVisualShapeCommandInit(self.handle) };
 
@@ -1374,7 +1470,9 @@ impl PhysicsClient {
     }
 
     pub fn create_multi_body(&mut self, options: &MultiBodyCreateOptions<'_>) -> BulletResult<i32> {
-        self.ensure_can_submit()?;
+        // Bullet reads the visual meshes, found by their names as given to
+        // create_visual_shape, while it creates the body.
+        let _process = self.hold_process_state()?;
         let command = unsafe { ffi::b3CreateMultiBodyCommandInit(self.handle) };
 
         let (base_position, base_orientation) = isometry_to_raw_parts(&options.base.pose);
@@ -1661,7 +1759,7 @@ impl PhysicsClient {
     }
 
     pub fn load_texture(&mut self, filename: &str) -> BulletResult<i32> {
-        self.ensure_can_submit()?;
+        let _process = self.hold_process_state()?;
         let filename_c = CString::new(filename)?;
         let command = unsafe { ffi::b3InitLoadTexture(self.handle, filename_c.as_ptr()) };
         let status = self.submit_simple_command(
