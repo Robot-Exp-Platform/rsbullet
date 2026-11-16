@@ -1,12 +1,27 @@
 use anyhow::Ok;
 use roplat_world::{Collision, Entity, Visual};
-use rsbullet_core::{CollisionId, MultiBodyBase, MultiBodyCreateOptions, VisualId};
+use rsbullet_core::{
+    CollisionId, CollisionShapeOptions, MultiBodyBase, MultiBodyCreateOptions, VisualId,
+    VisualShapeOptions,
+};
 
 use crate::RsBullet;
 
 pub struct CollisionMarker;
 pub struct VisualMarker;
 
+/// What [`EntityBuilder::load`](roplat_world::EntityBuilder::load) made: the
+/// shape, and the static body Bullet built of it. The body's id is the one
+/// a segmentation mask reports for the entity's pixels and the one body
+/// queries (`get_base_frame_pose`, `get_aabb`) take.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct LoadedEntity<S> {
+    pub shape: S,
+    pub body: i32,
+}
+
+/// Builds a shape as a static body of its own. `base` is the body's pose
+/// in the world; the shape sits at the body's origin.
 pub struct EntityBuilder<'a, T> {
     _marker: T,
     pub(crate) rsbullet: &'a mut RsBullet,
@@ -46,7 +61,7 @@ impl<'a> EntityBuilder<'a, VisualMarker> {
 }
 
 impl<'a> roplat_world::EntityBuilder<'a> for EntityBuilder<'a, CollisionMarker> {
-    type Entity = CollisionId;
+    type Entity = LoadedEntity<CollisionId>;
     fn name(mut self, _name: String) -> Self {
         self.name = Some(_name);
         self
@@ -64,30 +79,32 @@ impl<'a> roplat_world::EntityBuilder<'a> for EntityBuilder<'a, CollisionMarker> 
         self
     }
     fn load(self) -> anyhow::Result<Self::Entity> {
-        let id = self
+        // The shape at the body's origin: the base places the body, once.
+        let shape = self
             .rsbullet
             .client
-            .create_collision_shape(&self.entity.into(), self.base)
+            .create_collision_shape(&self.entity.into(), None::<CollisionShapeOptions>)
             .map(CollisionId)?;
 
-        self.rsbullet
+        let body = self
+            .rsbullet
             .client
             .create_multi_body(&MultiBodyCreateOptions {
                 base: MultiBodyBase {
                     mass: 0.,
-                    collision_shape: id,
+                    collision_shape: shape,
                     pose: self.base.unwrap_or_default(),
                     ..Default::default()
                 },
                 ..Default::default()
             })?;
 
-        Ok(id)
+        Ok(LoadedEntity { shape, body })
     }
 }
 
 impl<'a> roplat_world::EntityBuilder<'a> for EntityBuilder<'a, VisualMarker> {
-    type Entity = VisualId;
+    type Entity = LoadedEntity<VisualId>;
     fn name(mut self, _name: String) -> Self {
         self.name = Some(_name);
         self
@@ -105,24 +122,26 @@ impl<'a> roplat_world::EntityBuilder<'a> for EntityBuilder<'a, VisualMarker> {
         self
     }
     fn load(self) -> anyhow::Result<Self::Entity> {
-        let id = self
+        // The shape at the body's origin: the base places the body, once.
+        let shape = self
             .rsbullet
             .client
-            .create_visual_shape(&self.entity.into(), self.base)
+            .create_visual_shape(&self.entity.into(), None::<VisualShapeOptions>)
             .map(VisualId)?;
 
-        self.rsbullet
+        let body = self
+            .rsbullet
             .client
             .create_multi_body(&MultiBodyCreateOptions {
                 base: MultiBodyBase {
                     mass: 0.,
-                    visual_shape: id,
+                    visual_shape: shape,
                     pose: self.base.unwrap_or_default(),
                     ..Default::default()
                 },
                 ..Default::default()
             })?;
 
-        Ok(id)
+        Ok(LoadedEntity { shape, body })
     }
 }

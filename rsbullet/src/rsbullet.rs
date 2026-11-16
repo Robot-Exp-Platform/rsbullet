@@ -281,7 +281,7 @@ impl AddRobot for RsBullet {
 }
 
 impl AddCollision for RsBullet {
-    type EntityId = crate::CollisionId;
+    type EntityId = crate::LoadedEntity<crate::CollisionId>;
     type CB<'a> = crate::EntityBuilder<'a, crate::CollisionMarker>;
     fn collision<'a>(&'a mut self, collision: roplat_world::Collision<'a>) -> Self::CB<'a> {
         crate::EntityBuilder::collision(self, collision)
@@ -289,7 +289,7 @@ impl AddCollision for RsBullet {
 }
 
 impl AddVisual for RsBullet {
-    type EntityId = crate::VisualId;
+    type EntityId = crate::LoadedEntity<crate::VisualId>;
     type VB<'a> = crate::EntityBuilder<'a, crate::VisualMarker>;
     fn visual<'a>(&'a mut self, visual: roplat_world::Visual<'a>) -> Self::VB<'a> {
         crate::EntityBuilder::visual(self, visual)
