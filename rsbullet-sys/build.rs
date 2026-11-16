@@ -1,7 +1,10 @@
 use std::{
-    env, fs,
+    env,
     path::{Path, PathBuf},
 };
+
+#[path = "asset_export.rs"]
+mod asset_export;
 
 fn lib_exists(dir: &Path, name: &str) -> bool {
     // Windows static: Foo.lib；Unix static: libFoo.a
@@ -196,19 +199,31 @@ fn export_bullet_data() -> Result<(), String> {
         bullet_data_target_dir().ok_or_else(|| "could not determine user directory".to_string())?;
     let target = target_root.join("bullet");
 
-    // Builds must never delete or overwrite an existing user asset directory.
-    // Users can point examples at a separate freshly exported data directory
-    // when an asset refresh is needed.
-    if target.symlink_metadata().is_ok() {
+    // A link in the data directory's place is the user's own arrangement,
+    // perhaps into a read-only tree; it is left as it is.
+    if target
+        .symlink_metadata()
+        .is_ok_and(|m| m.file_type().is_symlink())
+    {
         println!(
-            "cargo:warning=preserving existing Bullet asset path {}; set BULLET_SKIP_ASSET_EXPORT=1 to disable asset export",
+            "cargo:warning=leaving the Bullet asset link {} as it is; set BULLET_SKIP_ASSET_EXPORT=1 to disable asset export",
             target.display()
         );
         return Ok(());
     }
-    copy_dir_recursive(&source_1, &target)?;
-    copy_dir_recursive(&source_2, &target)?;
-
+    // An existing directory is checked file by file and completed, so that
+    // an export cut short (an earlier build stopped, a read-only source
+    // tree) is finished by the next build; files Bullet's data does not
+    // have are left alone.
+    let done = asset_export::export(&[&source_1, &source_2], &target)?;
+    if done.copied > 0 {
+        println!(
+            "cargo:warning=wrote {} Bullet asset files into {} ({} were already there)",
+            done.copied,
+            target.display(),
+            done.kept
+        );
+    }
     Ok(())
 }
 
@@ -233,30 +248,4 @@ fn bullet_data_target_dir() -> Option<PathBuf> {
             .map(PathBuf::from)
             .map(|home| home.join(".local").join("share"))
     }
-}
-
-fn copy_dir_recursive(source: &Path, destination: &Path) -> Result<(), String> {
-    fs::create_dir_all(destination)
-        .map_err(|e| format!("failed to create {}: {e}", destination.display()))?;
-
-    for entry in
-        fs::read_dir(source).map_err(|e| format!("failed to read {}: {e}", source.display()))?
-    {
-        let entry = entry.map_err(|e| format!("failed to iterate directory: {e}"))?;
-        let path = entry.path();
-        let dest_path = destination.join(entry.file_name());
-        if path.is_dir() {
-            copy_dir_recursive(&path, &dest_path)?;
-        } else {
-            fs::copy(&path, &dest_path).map_err(|e| {
-                format!(
-                    "failed to copy {} to {}: {e}",
-                    path.display(),
-                    dest_path.display()
-                )
-            })?;
-        }
-    }
-
-    Ok(())
 }

@@ -126,7 +126,7 @@ The crates.io package includes the native engine source, not the full collection
 git clone --depth 1 https://github.com/bulletphysics/bullet3.git
 ```
 
-Point `set_additional_search_path` at that checkout's `examples/pybullet/gym/pybullet_data` directory and keep its meshes beside the URDFs. For a reproducible experiment, pin the model repository revision too. `BULLET_SKIP_ASSET_EXPORT=1` disables build-time asset copying; without it, the build may populate the user's Bullet data directory when that directory does not already exist.
+Point `set_additional_search_path` at that checkout's `examples/pybullet/gym/pybullet_data` directory and keep its meshes beside the URDFs. For a reproducible experiment, pin the model repository revision too. `BULLET_SKIP_ASSET_EXPORT=1` disables build-time asset copying. Without it, the build copies Bullet's `pybullet_data` and `data` (the latter's file winning a shared name) into the user's Bullet data directory (`PhysicsClient::bullet_data_path()`): a file missing there, or of another size than Bullet's, is written, and every file of Bullet's there is left writable by its owner; other files, the user's own included, are left alone, and a symlink in the directory's place is left as it is. An export cut short (an interrupted build, or an earlier version's export from a read-only source tree) is completed by the next build that runs the build script.
 
 ## Simulated sensors
 
